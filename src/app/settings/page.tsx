@@ -102,7 +102,7 @@ export default async function SettingsPage() {
           <section className="card space-y-3">
             <h2 className="h2">Domain health</h2>
             <F name="domain" label="My sending domain" value={s.domain} hint="blank = domain of From address" />
-            <F name="dkimSelector" label="DKIM selector" value={s.dkimSelector} hint="Hostinger usually: hostingermail1 (also -2, -3)" />
+            <F name="dkimSelector" label="DKIM selector" value={s.dkimSelector} hint="Hostinger: hostingermail-a (also -b, -c)" />
             {st.dns && <pre className="text-xs bg-slate-50 p-2 rounded whitespace-pre-wrap">{st.dns.detail}</pre>}
           </section>
         </div>

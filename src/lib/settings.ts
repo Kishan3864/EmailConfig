@@ -26,7 +26,7 @@ export const DEFAULTS: Settings = {
   gapMinMin: 5, gapMaxMin: 15,
   warmStart: 10, warmStep: 5, warmMax: 30, planDailyLimit: 100,
   aiBaseUrl: "https://api.openai.com/v1", aiModel: "gpt-4o-mini",
-  domain: "", dkimSelector: "hostingermail1",
+  domain: "", dkimSelector: "hostingermail-a",
   dryRun: true,
 };
 

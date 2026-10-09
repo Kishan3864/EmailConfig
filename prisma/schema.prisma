@@ -1,0 +1,172 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// key/value store: "settings" (JSON), "state" (JSON: global stop, alert, next send, imap cursor ...)
+model KV {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model LeadList {
+  id         Int         @id @default(autoincrement())
+  name       String
+  sourceNote String // where the addresses were found (shown in the footer)
+  confirmed  Boolean     @default(false)
+  createdAt  DateTime    @default(now())
+  rows       ImportRow[]
+  leads      Lead[]
+  campaigns  Campaign[]
+}
+
+model ImportRow {
+  id           Int      @id @default(autoincrement())
+  listId       Int
+  list         LeadList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  rowNo        Int
+  email        String?
+  businessName String?
+  website      String?
+  phone        String?
+  country      String?
+  outcome      String // send | skip | review
+  reason       String?
+  businessKey  String?
+  raw          String?
+}
+
+model Lead {
+  id            Int       @id @default(autoincrement())
+  email         String    @unique // one address is contacted once, ever
+  businessKey   String    @unique // one mail per business, ever
+  businessName  String?
+  website       String?
+  phone         String?
+  country       String?
+  listId        Int
+  list          LeadList  @relation(fields: [listId], references: [id])
+  campaignId    Int?
+  campaign      Campaign? @relation(fields: [campaignId], references: [id])
+  // ready | needs_review | rejected | sent | check_manual | bounced | replied | opted_out | failed | suppressed
+  status        String
+  note          String?
+  facts         String? // JSON of real homepage facts
+  factsAt       DateTime?
+  dryRunAt      DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  message       Message?
+  replies       Reply[]
+  events        Event[]
+
+  @@index([status])
+  @@index([campaignId, status])
+}
+
+model Campaign {
+  id               Int       @id @default(autoincrement())
+  name             String
+  listId           Int
+  list             LeadList  @relation(fields: [listId], references: [id])
+  timezone         String
+  language         String
+  status           String    @default("draft") // draft | running | paused | done
+  samplesApproved  Boolean   @default(false)
+  createdAt        DateTime  @default(now())
+  startedAt        DateTime?
+  leads            Lead[]
+  messages         Message[]
+}
+
+model Message {
+  id            Int       @id @default(autoincrement())
+  leadId        Int       @unique // exactly once per lead
+  lead          Lead      @relation(fields: [leadId], references: [id])
+  campaignId    Int
+  campaign      Campaign  @relation(fields: [campaignId], references: [id])
+  language      String
+  subject       String
+  body          String // AI body only; signature + footer appended at send time
+  subjectEn     String?
+  bodyEn        String?
+  // ready | sending | sent | retry | check_manual | failed | bounced
+  status        String    @default("ready")
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime?
+  sendStartedAt DateTime?
+  sentAt        DateTime?
+  messageId     String?
+  smtpResponse  String?
+  error         String?
+  createdAt     DateTime  @default(now())
+
+  @@index([status])
+}
+
+// one row per SMTP attempt (live or dry-run); used for caps, warm-up and history
+model SendLog {
+  id        Int      @id @default(autoincrement())
+  messageId Int?
+  leadId    Int?
+  to        String
+  dryRun    Boolean  @default(false)
+  ok        Boolean
+  response  String
+  at        DateTime @default(now())
+
+  @@index([at])
+}
+
+model DraftJob {
+  leadId     Int      @id
+  attempts   Int      @default(0)
+  lastError  String?
+  nextTryAt  DateTime @default(now())
+}
+
+model Suppression {
+  id        Int      @id @default(autoincrement())
+  value     String   @unique // email address or bare domain
+  kind      String // email | domain
+  reason    String
+  createdAt DateTime @default(now())
+}
+
+model Reply {
+  id         Int      @id @default(autoincrement())
+  leadId     Int?
+  lead       Lead?    @relation(fields: [leadId], references: [id])
+  kind       String // reply | optout | bounce | auto
+  fromEmail  String
+  subject    String?
+  body       String
+  bodyEn     String?
+  messageId  String?  @unique
+  receivedAt DateTime
+  createdAt  DateTime @default(now())
+}
+
+model Event {
+  id        Int      @id @default(autoincrement())
+  leadId    Int
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  type      String
+  detail    String?
+  at        DateTime @default(now())
+}
+
+model Log {
+  id      Int      @id @default(autoincrement())
+  level   String // info | warn | error
+  scope   String
+  message String
+  at      DateTime @default(now())
+
+  @@index([at])
+}

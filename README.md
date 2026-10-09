@@ -32,7 +32,7 @@ npm run build
 Development:
 
 ```bash
-npm run dev          # web UI on http://localhost:3000
+npm run dev          # web UI on http://localhost:3001
 npm run worker       # sender + inbox sync (second terminal)
 ```
 

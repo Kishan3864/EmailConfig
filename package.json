@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3000",
+    "dev": "next dev -p 3001",
     "build": "prisma generate && next build",
-    "start": "next start -p 3000",
+    "start": "next start -p 3001",
     "worker": "tsx worker/index.ts",
     "db:push": "prisma db push",
     "typecheck": "tsc --noEmit"

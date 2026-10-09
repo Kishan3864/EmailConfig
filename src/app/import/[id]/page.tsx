@@ -1,17 +1,18 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { prisma } from "@/lib/db";
+import { C, rows, type ImportRow, type LeadList } from "@/lib/fsdb";
 import { Badge } from "@/components/ui";
 import { ConfirmImport } from "./ConfirmImport";
 
 export default async function ImportPreview({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ f?: string }> }) {
-  const id = Number((await params).id);
+  const id = (await params).id;
   const { f } = await searchParams;
-  const list = await prisma.leadList.findUnique({ where: { id } });
-  if (!list) notFound();
-  const counts = await prisma.importRow.groupBy({ by: ["outcome"], where: { listId: id }, _count: true });
-  const c = Object.fromEntries(counts.map((x) => [x.outcome, x._count]));
-  const rows = await prisma.importRow.findMany({ where: { listId: id, ...(f ? { outcome: f } : {}) }, orderBy: { rowNo: "asc" }, take: 1000 });
+  const ld = await C.lists.doc(id).get();
+  if (!ld.exists) notFound();
+  const list = { id, ...ld.data() } as LeadList;
+  const c = list.counts || {};
+  const q = f ? C.lists.doc(id).collection("rows").where("outcome", "==", f) : C.lists.doc(id).collection("rows");
+  const items = rows<ImportRow>(await q.limit(1000).get()).sort((a, b) => a.rowNo - b.rowNo);
   return (
     <div className="space-y-4">
       <h1 className="h1">Preview: {list.name}</h1>
@@ -27,7 +28,7 @@ export default async function ImportPreview({ params, searchParams }: { params: 
         <table className="tbl">
           <thead><tr><th>#</th><th>Outcome</th><th>Reason</th><th>Email</th><th>Business</th><th>Website</th><th>Country</th></tr></thead>
           <tbody>
-            {rows.map((r) => (
+            {items.map((r) => (
               <tr key={r.id}><td>{r.rowNo}</td><td><Badge v={r.outcome} /></td><td className="text-xs text-slate-500">{r.reason}</td><td>{r.email}</td><td>{r.businessName}</td><td className="max-w-[220px] truncate">{r.website}</td><td>{r.country}</td></tr>
             ))}
           </tbody>

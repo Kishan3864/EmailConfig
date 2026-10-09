@@ -1,4 +1,5 @@
-import { prisma } from "./db";
+import { FieldValue } from "firebase-admin/firestore";
+import { C } from "./fsdb";
 
 export type Settings = {
   smtpHost: string; smtpPort: number; smtpSecure: boolean; smtpUser: string;
@@ -31,14 +32,12 @@ export const DEFAULTS: Settings = {
 };
 
 export async function getSettings(): Promise<Settings> {
-  const row = await prisma.kV.findUnique({ where: { key: "settings" } });
-  return { ...DEFAULTS, ...(row ? JSON.parse(row.value) : {}) };
+  const d = await C.kv.doc("settings").get();
+  return { ...DEFAULTS, ...(d.exists ? d.data() : {}) } as Settings;
 }
 
 export async function saveSettings(s: Partial<Settings>) {
-  const cur = await getSettings();
-  const value = JSON.stringify({ ...cur, ...s });
-  await prisma.kV.upsert({ where: { key: "settings" }, create: { key: "settings", value }, update: { value } });
+  await C.kv.doc("settings").set(s, { merge: true });
 }
 
 export type State = {
@@ -49,20 +48,25 @@ export type State = {
   lastSyncAt: string | null; lastWorkerTick: string | null;
   aiBackoffUntil: string | null;
   dns: { spf: boolean; dkim: boolean; dmarc: boolean; detail: string; at: string } | null;
+  sendDays: string[]; lastDraftAt: string | null;
 };
 
 const STATE_DEFAULT: State = {
   globalStop: false, alert: null, nextSendAt: null, imapUidValidity: null, imapLastUid: 0,
-  lastSyncAt: null, lastWorkerTick: null, aiBackoffUntil: null, dns: null,
+  lastSyncAt: null, lastWorkerTick: null, aiBackoffUntil: null, dns: null, sendDays: [], lastDraftAt: null,
 };
 
 export async function getState(): Promise<State> {
-  const row = await prisma.kV.findUnique({ where: { key: "state" } });
-  return { ...STATE_DEFAULT, ...(row ? JSON.parse(row.value) : {}) };
+  const d = await C.kv.doc("state").get();
+  return { ...STATE_DEFAULT, ...(d.exists ? d.data() : {}) } as State;
 }
 
+/** Merge-write only the given fields, so the web app and the worker never overwrite each other's fields. */
 export async function setState(s: Partial<State>) {
-  const cur = await getState();
-  const value = JSON.stringify({ ...cur, ...s });
-  await prisma.kV.upsert({ where: { key: "state" }, create: { key: "state", value }, update: { value } });
+  await C.kv.doc("state").set(s, { merge: true });
+}
+
+/** Record a day (in a timezone) on which live mail was sent; used for warm-up. */
+export async function addSendDay(tz: string, dayKey: string) {
+  await C.kv.doc("state").set({ sendDays: FieldValue.arrayUnion(`${tz}|${dayKey}`) }, { merge: true });
 }

@@ -1,95 +1,79 @@
-# EmailConfig: self-hosted cold outreach
+# EmailConfig: cold outreach on Firebase
 
-A single-user app that emails each lead **once**, slowly and automatically, from your Hostinger mailbox. Each message is personalised by an AI from facts the app checks on the lead's real homepage. When the app is unsure about anything, it does not send.
+A single-user app that emails each lead **once ever**, slowly and automatically, from your Hostinger mailbox. Each message is personalised by an AI from facts the app checks on the lead's real homepage. When the app is unsure about anything, it does not send.
 
-Stack: Next.js 15 (App Router) + TypeScript + Tailwind, SQLite + Prisma, Nodemailer, imapflow. A separate worker process handles sending and inbox sync, run under pm2.
+- **Web UI**: Next.js 15 on Firebase App Hosting
+- **Database**: Firestore (named database `outreach`, server-only access)
+- **Worker**: a scheduled Cloud Function `outreachTick`, run every 2 minutes. It syncs the inbox, prepares AI drafts and sends at most one mail per run.
+- **Mail**: Nodemailer (SMTP) and imapflow (IMAP) against Hostinger
 
-## Setup
+## Once-ever rule (how it is enforced)
+
+1. **Firestore `contacted` ledger.** Every address the app has ever tried to email is written here, together with its business in `contactedBiz`. Nothing in the app deletes from these collections.
+2. **Import.** Every row is checked against the ledger, existing leads and the suppression list. Matches are skipped with a visible reason. Leads are stored with the email as the document id, using create-only writes, so one address can exist only once, ever.
+3. **Send.** One Firestore transaction re-reads the ledger and the suppression list and claims the address *before* the SMTP call. If the address or its business is already in the ledger, the mail is blocked and the lead is marked `already_contacted`.
+4. **Crashes.** If a run crashes, or the server's answer is unclear, the lead becomes `check_manual` and is never resent automatically.
+5. **Ledger page.** You can add addresses you emailed yourself, or import every recipient from the mailbox's Sent folder.
+
+## Firebase deployment (one time)
+
+Requires the **Blaze** (pay-as-you-go) plan, which App Hosting and scheduled functions need. At this volume, usage stays inside the free tier.
 
 ```bash
-git clone https://github.com/Kishan3864/EmailConfig.git
-cd EmailConfig
 npm install
-cp .env.example .env        # then edit .env (see below)
-npx prisma db push          # creates data/app.db
-npm run build
+npx firebase-tools login
+npx firebase-tools use brighton-web-ea63c
+
+# 1. Firestore database + rules + indexes (separate from the website's default database)
+npx firebase-tools firestore:databases:create outreach --location=asia-south1
+npx firebase-tools deploy --only firestore:outreach
+
+# 2. Secrets (same names are used by the web app and the worker)
+npx firebase-tools functions:secrets:set SMTP_PASSWORD
+npx firebase-tools functions:secrets:set AI_API_KEY
+npx firebase-tools apphosting:secrets:set APP_PASSWORD
+npx firebase-tools apphosting:secrets:set SESSION_SECRET
+
+# 3. Worker (scheduled function)
+cd functions && npm install && cd ..
+npx firebase-tools deploy --only functions:outreach
+
+# 4. Web UI
+npx firebase-tools apphosting:backends:create --backend outreach --primary-region asia-south1
+npx firebase-tools apphosting:secrets:grantaccess SMTP_PASSWORD,AI_API_KEY,APP_PASSWORD,SESSION_SECRET --backend outreach
+npx firebase-tools deploy --only apphosting
 ```
 
-`.env` (secrets live only here and are never committed):
+Redeploy after changes: `npm run deploy:worker` and `npm run deploy:web`.
 
-| Key | What |
-|---|---|
-| `DATABASE_URL` | `file:../data/app.db` |
-| `APP_PASSWORD` | your login password |
-| `SESSION_SECRET` | random string, 32+ chars (`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`) |
-| `SMTP_PASSWORD` | Hostinger mailbox password |
-| `IMAP_PASSWORD` | optional, defaults to `SMTP_PASSWORD` |
-| `AI_API_KEY` | key for any OpenAI-compatible endpoint |
-| `COOKIE_SECURE` | `true` when served over HTTPS |
+## Local development
 
-## Run
-
-Development:
+1. In the Firebase console, go to Project settings → Service accounts → Generate new private key. Save the file as `service-account.json` in the project root (it is gitignored).
+2. Copy `.env.example` to `.env` and fill it in.
+3. Run:
 
 ```bash
-npm run dev          # web UI on http://localhost:3001
-npm run worker       # sender + inbox sync (second terminal)
+npm run migrate:settings   # one time: copies settings from the old local SQLite DB into Firestore
+npm run dev                # http://localhost:3001
+npm run worker             # local worker (do not run it while the Cloud Function is deployed; the Firestore lock prevents double sends anyway)
 ```
-
-Production with pm2:
-
-```bash
-npm i -g pm2
-npm run build
-pm2 start ecosystem.config.js     # starts outreach-web and outreach-worker
-pm2 save && pm2 startup           # restart on reboot
-pm2 logs outreach-worker          # watch sending
-pm2 restart all                   # after git pull + npm run build
-```
-
-Put the web app behind a reverse proxy with HTTPS (nginx or Caddy) if it is reachable from the internet.
 
 ## First-time checklist
 
-1. **Settings**: fill in your mailbox, sender profile, offer notes, test address, alert address, AI base URL and model, and domain plus DKIM selector. Click **Test SMTP**, **Test IMAP**, **Send test mail to me**, **Test AI** and **Check DNS**.
-2. Leave **Dry-run** on for the first campaign. Mails then go only to your test address.
-3. **Import**: upload a CSV, XLSX, PDF or TXT file, or paste text. Map the columns, say where you found the addresses, review the preview, then confirm.
-4. **Contacts → needs_review**: approve or reject addresses that look like a private person's.
-5. **Campaigns**: create a campaign. Generate the 5 sample drafts, read them, then click **Approve samples & start**. A campaign is blocked if SPF or DKIM is missing.
-6. When you are happy with the results, turn off dry-run in Settings.
+1. **Settings**: fill in your test address, alert address, sender profile and offer notes. Click **Send test mail to me** and **Check DNS**.
+2. **Ledger → Import Sent folder recipients**, so that nobody you already emailed gets a cold mail.
+3. Leave **Dry-run** on for the first campaign. Mails then go only to your test address.
+4. **Import** a list, check the preview, then confirm. Approve any **needs_review** addresses under Contacts.
+5. **Campaigns**: create a campaign, generate the 5 samples, read them, then approve and start.
+6. When the dry-run mails look right, turn off dry-run.
 
-## Safety rules built in
+## Mailbox protection (Hostinger)
 
-- Each email address is unique in the DB, ever, and so is each business key (website domain, or the email domain when it is not a free-mail provider). Each lead has exactly one message.
-- Before the SMTP call, the message is marked `sending` inside a transaction. If the worker crashes, or the server's answer is unclear, the message becomes `check_manual` and is never resent.
-- A message is retried (at most 2 times, on later days) only when the server clearly refused it. There are no follow-ups.
-- All sending pauses automatically, with a red alert and an email to you, on:
-  - any SMTP auth, policy or rate-limit error
-  - 2 hard bounces in one day
-  - a bounce rate above 5% over the last 50 sends
-- Sending happens only on Mon–Fri, 09:30–17:30 in the campaign's timezone, with a random 5–15 minute gap. Warm-up starts at 10 per day and adds 5 each sending day, up to 30, and never exceeds 40% of your mailbox plan limit. All of these are editable.
-- Mails are plain text only: no tracking, no links in the AI-written body, a List-Unsubscribe mailto header, and a footer in the recipient's language ("where I found you", "reply STOP").
-- The suppression list is permanent. Bounces and opt-outs are added automatically, and nothing is ever removed from it.
+- **Pace.** For a new domain, start slowly: 5/day on day one, then +3 per sending day, up to 25/day. Mails are sent one at a time with a random 8–20 minute gap, Mon–Fri, 09:30–17:30 in the recipient's timezone. A day never exceeds 40% of the mailbox plan limit.
+- **Auto-pause.** Everything stops on any SMTP auth, policy or rate-limit error, on 2 hard bounces in a day, or on a bounce rate above 5%. You get a red alert and an email.
+- **Address filtering.** Before import, the app checks MX records, removes role and chain addresses, and holds personal-looking addresses for your approval.
+- **Message content.** Mails are plain text with no links in the body and no tracking. They carry a List-Unsubscribe header and a STOP footer. Opt-outs and bounces are suppressed permanently.
 
-## DB backup
+## Backup
 
-SQLite is a single file at `data/app.db`.
-
-```bash
-mkdir -p backups
-sqlite3 data/app.db ".backup 'backups/app-$(date +%F).db'"     # safe while running
-# or, with the apps stopped:
-pm2 stop all && cp data/app.db backups/app-$(date +%F).db && pm2 start all
-```
-
-Daily cron (Linux):
-
-```
-0 2 * * * cd /path/to/EmailConfig && sqlite3 data/app.db ".backup 'backups/app-$(date +\%F).db'" && find backups -mtime +30 -delete
-```
-
-To restore: `pm2 stop all`, copy the backup over `data/app.db`, then `pm2 start all`.
-
-## Firebase note
-
-The app needs a process that is always running (the pm2 worker) and a local SQLite file. Firebase Hosting and Cloud Functions provide neither, so run it on a small VPS (for example a Hostinger VPS) or your own PC. Firebase could replace the database later (Firestore instead of SQLite/Prisma), but the worker still needs a server.
+Firestore keeps the data. For an extra copy: `gcloud firestore export gs://<bucket> --database=outreach`, or use the CSV export on the Contacts page.

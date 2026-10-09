@@ -1,12 +1,12 @@
 import Link from "next/link";
-import { prisma } from "@/lib/db";
+import { C, rows, type SendLog, type LogRow } from "@/lib/fsdb";
 import { Badge } from "@/components/ui";
 import { fmt } from "@/lib/time";
 
 export default async function Logs({ searchParams }: { searchParams: Promise<{ tab?: string; level?: string }> }) {
   const { tab = "logs", level } = await searchParams;
-  const sends = tab === "smtp" ? await prisma.sendLog.findMany({ orderBy: { id: "desc" }, take: 500 }) : [];
-  const logs = tab === "smtp" ? [] : await prisma.log.findMany({ where: level ? { level } : {}, orderBy: { id: "desc" }, take: 500 });
+  const sends = tab === "smtp" ? rows<SendLog>(await C.sendLogs.orderBy("at", "desc").limit(500).get()) : [];
+  const logs = tab === "smtp" ? [] : rows<LogRow>(await (level ? C.logs.where("level", "==", level) : C.logs).orderBy("at", "desc").limit(500).get());
   return (
     <div className="space-y-4">
       <div className="flex gap-2">

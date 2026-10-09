@@ -1,0 +1,21 @@
+# Firebase App Hosting config for the web UI
+runConfig:
+  minInstances: 0
+  maxInstances: 2
+  concurrency: 40
+  cpu: 1
+  memoryMiB: 1024
+  timeoutSeconds: 300
+env:
+  - variable: FIRESTORE_DATABASE_ID
+    value: outreach
+  - variable: COOKIE_SECURE
+    value: "true"
+  - variable: APP_PASSWORD
+    secret: APP_PASSWORD
+  - variable: SESSION_SECRET
+    secret: SESSION_SECRET
+  - variable: SMTP_PASSWORD
+    secret: SMTP_PASSWORD
+  - variable: AI_API_KEY
+    secret: AI_API_KEY

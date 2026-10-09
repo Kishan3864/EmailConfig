@@ -1,5 +1,5 @@
-import { prisma } from "./db";
-import type { Settings } from "./settings";
+import { C, count } from "./fsdb";
+import { getState, type Settings } from "./settings";
 import { dayStart, hm, partsIn, zoned } from "./time";
 
 /** Daily cap for a given number of previous sending days */
@@ -11,12 +11,14 @@ export function capFor(s: Settings, priorDays: number) {
 
 /** Number of distinct earlier days (in tz) with at least one accepted live send */
 export async function priorSendingDays(tz: string, now = new Date()) {
-  const rows = await prisma.sendLog.findMany({ where: { ok: true, dryRun: false, at: { lt: dayStart(now, tz) } }, select: { at: true } });
-  return new Set(rows.map((r) => partsIn(r.at, tz).dayKey)).size;
+  const today = partsIn(now, tz).dayKey;
+  const days = (await getState()).sendDays || [];
+  return new Set(days.filter((d) => d.startsWith(tz + "|") && d.split("|")[1] < today)).size;
 }
 
+/** Accepted sends today (live + dry-run: both count against today's pace) */
 export async function sentToday(tz: string, now = new Date()) {
-  return prisma.sendLog.count({ where: { ok: true, at: { gte: dayStart(now, tz) } } });
+  return count(C.sendLogs.where("ok", "==", true).where("at", ">=", dayStart(now, tz).toISOString()));
 }
 
 export async function todayCap(s: Settings, tz: string, now = new Date()) {

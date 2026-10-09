@@ -1,0 +1,15 @@
+{
+  "firestore": [
+    { "database": "outreach", "rules": "firestore.rules", "indexes": "firestore.indexes.json" }
+  ],
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "outreach",
+      "predeploy": ["npx esbuild worker/function.ts --bundle --platform=node --target=node22 --format=cjs --packages=external --outfile=functions/lib/index.js"]
+    }
+  ],
+  "apphosting": [
+    { "backendId": "outreach", "rootDir": "/", "ignore": ["node_modules", ".git", "functions", ".env", "*.json.key", "service-account*.json", "data", ".next"] }
+  ]
+}

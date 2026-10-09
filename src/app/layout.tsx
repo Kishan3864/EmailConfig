@@ -7,7 +7,7 @@ import { COOKIE, verifyToken } from "@/lib/session";
 export const metadata = { title: "Outreach" };
 export const dynamic = "force-dynamic";
 
-const NAV = [["/", "Dashboard"], ["/import", "Import"], ["/campaigns", "Campaigns"], ["/contacts", "Contacts"], ["/replies", "Replies"], ["/suppression", "Suppression"], ["/logs", "Logs"], ["/settings", "Settings"]];
+const NAV = [["/", "Dashboard"], ["/import", "Import"], ["/campaigns", "Campaigns"], ["/contacts", "Contacts"], ["/replies", "Replies"], ["/ledger", "Ledger"], ["/suppression", "Suppression"], ["/logs", "Logs"], ["/settings", "Settings"]];
 
 export default async function Root({ children }: { children: ReactNode }) {
   const authed = await verifyToken((await cookies()).get(COOKIE)?.value);

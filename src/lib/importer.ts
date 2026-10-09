@@ -1,5 +1,7 @@
-import { prisma } from "./db";
+import type { CollectionReference } from "firebase-admin/firestore";
+import { C, key } from "./fsdb";
 import { hasMx } from "./dnscheck";
+import { getAllChunked } from "./ledger";
 
 export type InRow = { email?: string; businessName?: string; website?: string; phone?: string; country?: string; chain?: string; raw?: string };
 export type OutRow = InRow & { rowNo: number; outcome: "send" | "skip" | "review"; reason?: string; businessKey?: string };
@@ -56,11 +58,17 @@ const truthy = (v?: string) => !!v && /^(1|y|yes|true|oui|x|chain|chaine|chaîne
 export async function processRows(rows: InRow[]): Promise<OutRow[]> {
   const out: OutRow[] = rows.map((r, i) => ({ ...r, email: pickEmail(r.email), rowNo: i + 1, outcome: "send" as const }));
 
-  const supp = await prisma.suppression.findMany();
-  const suppSet = new Set(supp.map((s) => s.value));
-  const existing = await prisma.lead.findMany({ select: { email: true, businessKey: true } });
-  const exEmail = new Set(existing.map((e) => e.email));
-  const exBiz = new Set(existing.map((e) => e.businessKey));
+  // look up everything this file touches in Firestore: ledger, existing leads, suppression
+  const emails = [...new Set(out.map((r) => r.email!).filter(validSyntax))];
+  const bizKeys = [...new Set(out.flatMap((r) => (r.email && validSyntax(r.email) ? [siteDomain(r.website) || (FREEMAIL.has(emailDomain(r.email)) ? r.email : emailDomain(r.email))] : [])))];
+  const doms = [...new Set(out.flatMap((r) => [r.email ? emailDomain(r.email) : "", siteDomain(r.website)]).filter(Boolean))];
+  const exists = async (col: CollectionReference, ids: string[]) => {
+    const snaps = await getAllChunked(ids.map((i) => col.doc(key(i))));
+    return new Set(ids.filter((_, i) => snaps[i].exists));
+  };
+  const [contacted, contactedBiz, exEmail, exBiz, suppSet] = await Promise.all([
+    exists(C.contacted, emails), exists(C.contactedBiz, bizKeys), exists(C.leads, emails), exists(C.businesses, bizKeys), exists(C.suppression, [...emails, ...doms]),
+  ]);
 
   // chain counts: same domain or same email on 3+ rows
   const domCount = new Map<string, number>(), emCount = new Map<string, number>();
@@ -82,12 +90,14 @@ export async function processRows(rows: InRow[]): Promise<OutRow[]> {
     const ed = emailDomain(e);
     const sd = siteDomain(r.website);
     if (suppSet.has(e) || suppSet.has(ed) || (sd && suppSet.has(sd))) { skip(r, "suppressed"); continue; }
-    if (exEmail.has(e)) { skip(r, "already contacted / already imported"); continue; }
+    if (contacted.has(e)) { skip(r, "already contacted (in Firebase ledger)"); continue; }
+    if (exEmail.has(e)) { skip(r, "already imported in an earlier list"); continue; }
     const bizDom = sd || (FREEMAIL.has(ed) ? "" : ed);
     if (truthy(r.chain)) { skip(r, "marked as chain"); continue; }
     if ((emCount.get(e) || 0) >= 3 || (bizDom && (domCount.get(bizDom) || 0) >= 3)) { skip(r, "chain (3+ rows share this domain/email)"); continue; }
     r.businessKey = bizDom || e;
-    if (exBiz.has(r.businessKey)) { skip(r, "business already contacted / imported"); continue; }
+    if (contactedBiz.has(r.businessKey)) { skip(r, "business already contacted (in Firebase ledger)"); continue; }
+    if (exBiz.has(r.businessKey)) { skip(r, "business already imported in an earlier list"); continue; }
   }
 
   // one per business inside the file: prefer contact@/info@/hello@...

@@ -8,3 +8,10 @@ backups
 *.log
 next-env.d.ts
 tsconfig.tsbuildinfo
+
+# Firebase
+service-account*.json
+*-firebase-adminsdk-*.json
+functions/lib
+functions/node_modules
+.firebase

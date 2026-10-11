@@ -20,8 +20,8 @@ A single-user app that emails each lead **once ever**, slowly and automatically,
 Needs Node 20+, pm2 and nginx. The app only adds its own folder, two pm2 processes and one nginx site file.
 
 ```bash
-git clone https://github.com/Kishan3864/EmailConfig.git ~/email.brightonsolution.com
-cd ~/email.brightonsolution.com
+git clone https://github.com/Kishan3864/EmailConfig.git ~/email.flexypdf.com
+cd ~/email.flexypdf.com
 # copy .env and service-account.json into this folder (they are not in git), then:
 chmod 600 .env service-account.json
 npm ci
@@ -37,7 +37,7 @@ nginx site (`/etc/nginx/sites-available/<domain>`), then `certbot --nginx -d <do
 ```nginx
 server {
     listen 80;
-    server_name email.brightonsolution.com;
+    server_name email.flexypdf.com;
     client_max_body_size 25m;
 
     location / {
@@ -57,7 +57,7 @@ The `Host`, `X-Real-IP` and `X-Forwarded-Proto` headers are required: the app us
 Update later:
 
 ```bash
-cd ~/email.brightonsolution.com && git pull && npm ci && npm run build && pm2 restart outreach-web outreach-worker
+cd ~/email.flexypdf.com && git pull && npm ci && npm run build && pm2 restart outreach-web outreach-worker
 ```
 
 Run the worker in one place only. A Firestore lock and the ledger prevent double sends even if two run, but one is cleaner.

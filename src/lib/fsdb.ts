@@ -12,7 +12,7 @@ function init(): Firestore {
     const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
     app = sa ? initializeApp({ credential: cert(JSON.parse(sa)) }) : initializeApp(process.env.FIREBASE_PROJECT_ID ? { projectId: process.env.FIREBASE_PROJECT_ID } : undefined);
   }
-  const db = getFirestore(app, process.env.FIRESTORE_DATABASE_ID || "outreach");
+  const db = getFirestore(app, process.env.FIRESTORE_DATABASE_ID || "(default)");
   db.settings({ ignoreUndefinedProperties: true });
   g.__fsdb = db;
   return db;
@@ -20,20 +20,25 @@ function init(): Firestore {
 
 export const db = init();
 
+// All outreach collections share one prefix, so they can live in the project's existing database
+// next to the website's own collections without ever colliding with them.
+const P = process.env.FIRESTORE_PREFIX ?? "outreach_";
+export const EVENTS = P + "events"; // subcollection of a lead
+
 export const C = {
-  kv: db.collection("kv"),
-  contacted: db.collection("contacted"), // PERMANENT ledger: every address ever emailed (never deleted)
-  contactedBiz: db.collection("contactedBiz"), // PERMANENT ledger: every business ever emailed
-  leads: db.collection("leads"), // doc id = email key  -> one lead per address, ever
-  businesses: db.collection("businesses"), // doc id = business key -> one lead per business, ever
-  lists: db.collection("lists"),
-  campaigns: db.collection("campaigns"),
-  messages: db.collection("messages"), // doc id = lead id -> exactly one message per lead
-  sendLogs: db.collection("sendLogs"),
-  draftJobs: db.collection("draftJobs"),
-  suppression: db.collection("suppression"), // doc id = email or domain key
-  replies: db.collection("replies"),
-  logs: db.collection("logs"),
+  kv: db.collection(P + "kv"),
+  contacted: db.collection(P + "contacted"), // PERMANENT ledger: every address ever emailed (never deleted)
+  contactedBiz: db.collection(P + "contactedBiz"), // PERMANENT ledger: every business ever emailed
+  leads: db.collection(P + "leads"), // doc id = email key  -> one lead per address, ever
+  businesses: db.collection(P + "businesses"), // doc id = business key -> one lead per business, ever
+  lists: db.collection(P + "lists"),
+  campaigns: db.collection(P + "campaigns"),
+  messages: db.collection(P + "messages"), // doc id = lead id -> exactly one message per lead
+  sendLogs: db.collection(P + "sendLogs"),
+  draftJobs: db.collection(P + "draftJobs"),
+  suppression: db.collection(P + "suppression"), // doc id = email or domain key
+  replies: db.collection(P + "replies"),
+  logs: db.collection(P + "logs"),
 };
 
 export const nowIso = () => new Date().toISOString();

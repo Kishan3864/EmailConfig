@@ -7,8 +7,6 @@ runConfig:
   memoryMiB: 1024
   timeoutSeconds: 300
 env:
-  - variable: FIRESTORE_DATABASE_ID
-    value: outreach
   - variable: COOKIE_SECURE
     value: "true"
   - variable: APP_PASSWORD

@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { C, key, rows, type Lead, type Message, type Reply, type SendLog, type EventRow, type LeadList, type Campaign } from "@/lib/fsdb";
+import { C, EVENTS, key, rows, type Lead, type Message, type Reply, type SendLog, type EventRow, type LeadList, type Campaign } from "@/lib/fsdb";
 import { Badge } from "@/components/ui";
 import { fmt } from "@/lib/time";
 import { approveLead, rejectLead, markCheckedSent, markCheckedNotSent } from "../../actions";
@@ -14,7 +14,7 @@ export default async function Contact({ params }: { params: Promise<{ id: string
   ]);
   const m = md.exists ? ({ id, ...md.data() } as Message) : null;
   const replies = rows<Reply>(await C.replies.where("leadId", "==", id).get()).sort((a, b) => a.receivedAt.localeCompare(b.receivedAt));
-  const events = rows<EventRow>(await C.leads.doc(id).collection("events").orderBy("at").get());
+  const events = rows<EventRow>(await C.leads.doc(id).collection(EVENTS).orderBy("at").get());
   const sends = rows<SendLog>(await C.sendLogs.where("leadId", "==", id).get()).sort((a, b) => a.at.localeCompare(b.at));
   const ls = list.data() as LeadList | undefined;
   const cn = camp?.exists ? (camp.data() as Campaign).name : "—";

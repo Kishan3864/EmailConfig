@@ -1,7 +1,7 @@
 {
   "indexes": [
     {
-      "collectionGroup": "leads",
+      "collectionGroup": "outreach_leads",
       "queryScope": "COLLECTION",
       "fields": [
         {
@@ -23,7 +23,7 @@
       ]
     },
     {
-      "collectionGroup": "leads",
+      "collectionGroup": "outreach_leads",
       "queryScope": "COLLECTION",
       "fields": [
         {
@@ -41,7 +41,7 @@
       ]
     },
     {
-      "collectionGroup": "leads",
+      "collectionGroup": "outreach_leads",
       "queryScope": "COLLECTION",
       "fields": [
         {
@@ -55,7 +55,7 @@
       ]
     },
     {
-      "collectionGroup": "leads",
+      "collectionGroup": "outreach_leads",
       "queryScope": "COLLECTION",
       "fields": [
         {
@@ -69,7 +69,7 @@
       ]
     },
     {
-      "collectionGroup": "messages",
+      "collectionGroup": "outreach_messages",
       "queryScope": "COLLECTION",
       "fields": [
         {
@@ -91,7 +91,7 @@
       ]
     },
     {
-      "collectionGroup": "messages",
+      "collectionGroup": "outreach_messages",
       "queryScope": "COLLECTION",
       "fields": [
         {
@@ -109,7 +109,7 @@
       ]
     },
     {
-      "collectionGroup": "messages",
+      "collectionGroup": "outreach_messages",
       "queryScope": "COLLECTION",
       "fields": [
         {
@@ -123,7 +123,7 @@
       ]
     },
     {
-      "collectionGroup": "sendLogs",
+      "collectionGroup": "outreach_sendLogs",
       "queryScope": "COLLECTION",
       "fields": [
         {
@@ -137,7 +137,7 @@
       ]
     },
     {
-      "collectionGroup": "sendLogs",
+      "collectionGroup": "outreach_sendLogs",
       "queryScope": "COLLECTION",
       "fields": [
         {
@@ -151,7 +151,7 @@
       ]
     },
     {
-      "collectionGroup": "replies",
+      "collectionGroup": "outreach_replies",
       "queryScope": "COLLECTION",
       "fields": [
         {
@@ -165,7 +165,7 @@
       ]
     },
     {
-      "collectionGroup": "replies",
+      "collectionGroup": "outreach_replies",
       "queryScope": "COLLECTION",
       "fields": [
         {
@@ -179,7 +179,7 @@
       ]
     },
     {
-      "collectionGroup": "logs",
+      "collectionGroup": "outreach_logs",
       "queryScope": "COLLECTION",
       "fields": [
         {

@@ -1,4 +1,4 @@
-import { C, nowIso } from "./fsdb";
+import { C, EVENTS, nowIso } from "./fsdb";
 
 export async function log(level: "info" | "warn" | "error", scope: string, message: string) {
   // never log secrets: callers pass only non-sensitive text
@@ -8,5 +8,5 @@ export async function log(level: "info" | "warn" | "error", scope: string, messa
 }
 
 export async function event(leadId: string, type: string, detail?: string) {
-  await C.leads.doc(leadId).collection("events").add({ type, detail: detail?.slice(0, 4000) ?? null, at: nowIso() }).catch(() => {});
+  await C.leads.doc(leadId).collection(EVENTS).add({ type, detail: detail?.slice(0, 4000) ?? null, at: nowIso() }).catch(() => {});
 }

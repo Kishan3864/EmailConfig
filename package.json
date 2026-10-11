@@ -9,9 +9,9 @@
     "worker": "tsx worker/index.ts",
     "typecheck": "tsc --noEmit",
     "migrate:settings": "tsx scripts/migrate-settings.ts",
-    "deploy:rules": "firebase deploy --only firestore:outreach",
     "deploy:worker": "firebase deploy --only functions:outreach",
-    "deploy:web": "firebase deploy --only apphosting"
+    "deploy:web": "firebase deploy --only apphosting",
+    "deploy:indexes": "firebase deploy --only firestore:indexes"
   },
   "dependencies": {
     "cheerio": "^1.1.2",

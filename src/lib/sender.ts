@@ -1,8 +1,8 @@
 import { FieldValue } from "firebase-admin/firestore";
 import { db, C, key, nowIso, rows, type Campaign, type LeadList, type Lead, type Message } from "./fsdb";
-import { getSettings, getState, setState, addSendDay, type Settings } from "./settings";
+import { getSettings, getState, setState, addSendDay } from "./settings";
 import { buildRaw, sendRaw, appendToSent } from "./mailer";
-import { footer } from "./lang";
+import { fullText, mailParts, signature } from "./compose";
 import { inWindow, nextSendingDay, sentToday, todayCap } from "./schedule";
 import { canSend, emergencyStop, checkBounceThresholds } from "./guard";
 import { emailDomain, siteDomain } from "./importer";
@@ -34,14 +34,7 @@ export function classify(e: SmtpErr): "pause" | "hard" | "retry" | "uncertain" {
   return "uncertain";
 }
 
-export function signature(s: Settings) {
-  const lines = [s.senderName, [s.senderRole, s.business].filter(Boolean).join(", "), s.website, ...s.portfolio.split(/[\n,]+/).map((x) => x.trim()).filter(Boolean)];
-  return lines.filter(Boolean).join("\n");
-}
-
-export function fullText(s: Settings, body: string, lang: string, source: string) {
-  return `${body.trim()}\n\n${signature(s)}\n\n${footer(lang, source, s.postalAddress)}`;
-}
+export { fullText, signature };
 
 const setLead = (id: string, data: Record<string, unknown>) => C.leads.doc(id).update({ ...data, updatedAt: nowIso() });
 
@@ -114,13 +107,13 @@ export async function trySendOne(): Promise<string> {
     const lead = { id: leadSnap.id, ...leadSnap.data() } as Lead;
     if (lead.status !== "ready") continue;
     const list = (await C.lists.doc(lead.listId).get()).data() as LeadList | undefined;
-    const text = fullText(s, msg.body, msg.language, list?.sourceNote || "a public business directory");
+    const parts = mailParts(s, msg.body, msg.language, list?.sourceNote || "a public business directory");
     const gapMin = s.gapMinMin + Math.random() * Math.max(0, s.gapMaxMin - s.gapMinMin);
 
     // ---------- DRY RUN: everything runs, delivery only to my test address ----------
     if (s.dryRun) {
       if (!s.testEmail) return "dry-run needs a test address";
-      const { raw } = await buildRaw({ s, to: s.testEmail, subject: `[DRY RUN → ${lead.email}] ${msg.subject}`, text, listUnsub: true });
+      const { raw } = await buildRaw({ s, to: s.testEmail, subject: `[DRY RUN → ${lead.email}] ${msg.subject}`, ...parts, listUnsub: true });
       try {
         const info = await sendRaw(s, s.testEmail, raw);
         await C.sendLogs.add({ messageId: msg.id, leadId: lead.id, to: s.testEmail, dryRun: true, ok: true, response: String(info.response), at: nowIso() });
@@ -148,7 +141,7 @@ export async function trySendOne(): Promise<string> {
     }
     await event(lead.id, "sending", `attempt ${msg.attempts + 1}`);
 
-    const { raw, messageId } = await buildRaw({ s, to: lead.email, subject: msg.subject, text, listUnsub: true });
+    const { raw, messageId } = await buildRaw({ s, to: lead.email, subject: msg.subject, ...parts, listUnsub: true });
     let info: Awaited<ReturnType<typeof sendRaw>> | null = null;
     let error: SmtpErr | null = null;
     try { info = await sendRaw(s, lead.email, raw); } catch (e) { error = e as SmtpErr; }

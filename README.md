@@ -96,7 +96,8 @@ Firestore indexes live in `firestore.indexes.json`. Deploy them with `npm run de
 - **Pace.** For a new domain, start slowly: 5/day on day one, then +3 per sending day, up to 25/day. Mails are sent one at a time with a random 8–20 minute gap, Mon–Fri, 09:30–17:30 in the recipient's timezone. A day never exceeds 40% of the mailbox plan limit.
 - **Auto-pause.** Everything stops on any SMTP auth, policy or rate-limit error, on 2 hard bounces in a day, or on a bounce rate above 5%. You get a red alert and an email.
 - **Address filtering.** Before import, the app checks MX records, removes role and chain addresses, and holds personal-looking addresses for your approval.
-- **Message content.** Mails are plain text with no links in the body and no tracking. They carry a List-Unsubscribe header and a STOP footer. Opt-outs and bounces are suppressed permanently.
+- **Message content.** Mails have no links in the body and no tracking. They carry a List-Unsubscribe header and a STOP footer. Opt-outs and bounces are suppressed permanently.
+- **Logo in signature (optional, Settings).** Off: plain text only. On: the mail also gets an HTML part with the logo embedded in the mail itself (no remote image). The logo comes from `assets/logo.svg`; after changing it run `node scripts/make-logo.cjs`.
 
 ## Backup
 

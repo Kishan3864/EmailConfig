@@ -63,6 +63,8 @@ export default async function SettingsPage() {
             <F name="website" label="Website" value={s.website} />
             <T name="portfolio" label="Portfolio links (one per line)" value={s.portfolio} />
             <T name="postalAddress" label="Postal address (in footer)" value={s.postalAddress} />
+            <C name="signatureLogo" label="Logo in signature (sends HTML mail with a small embedded image)" checked={s.signatureLogo} />
+            <p className="text-xs text-slate-400">Off = plain text only, which is the safest for deliverability while a new domain warms up.</p>
           </section>
 
           <section className="card space-y-3">

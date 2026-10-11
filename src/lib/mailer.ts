@@ -2,6 +2,7 @@ import nodemailer from "nodemailer";
 import MailComposer from "nodemailer/lib/mail-composer";
 import { ImapFlow } from "imapflow";
 import { getSettings, type Settings } from "./settings";
+import { mailParts } from "./compose";
 
 export function smtpTransport(s: Settings) {
   return nodemailer.createTransport({
@@ -24,7 +25,9 @@ export function fromHeader(s: Settings) {
   return s.senderName ? { name: s.senderName, address: s.fromEmail } : s.fromEmail;
 }
 
-export async function buildRaw(opts: { s: Settings; to: string; subject: string; text: string; listUnsub?: boolean; extraHeaders?: Record<string, string> }) {
+type InlineAttachment = { filename: string; content: Buffer; contentType: string; cid: string; contentDisposition: "inline" };
+
+export async function buildRaw(opts: { s: Settings; to: string; subject: string; text: string; html?: string; attachments?: InlineAttachment[]; listUnsub?: boolean; extraHeaders?: Record<string, string> }) {
   const { s } = opts;
   const domain = s.fromEmail.split("@")[1] || "localhost";
   const messageId = `<${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 10)}@${domain}>`;
@@ -32,6 +35,7 @@ export async function buildRaw(opts: { s: Settings; to: string; subject: string;
   if (opts.listUnsub) headers["List-Unsubscribe"] = `<mailto:${s.fromEmail}?subject=STOP>`;
   const mail = new MailComposer({
     from: fromHeader(s), to: opts.to, subject: opts.subject, text: opts.text,
+    html: opts.html, attachments: opts.attachments,
     messageId, headers, date: new Date(),
     textEncoding: "quoted-printable",
   });
@@ -99,7 +103,9 @@ export async function testImap() {
 export async function sendTestMail() {
   const s = await getSettings();
   if (!s.testEmail) throw new Error("Set your test address first");
-  const { raw } = await buildRaw({ s, to: s.testEmail, subject: "Test mail from your outreach app", text: "If you can read this, SMTP sending works.\n\n-- \nOutreach app" });
+  // same signature, footer and logo setting as a real outreach mail, so the test shows what leads will see
+  const parts = mailParts(s, "If you can read this, SMTP sending works.\n\nThis is how your signature and footer look in a real mail.", "en", "this test");
+  const { raw } = await buildRaw({ s, to: s.testEmail, subject: "Test mail from your outreach app", ...parts, listUnsub: true });
   const info = await sendRaw(s, s.testEmail, raw);
   return `Sent to ${s.testEmail}: ${info.response}`;
 }

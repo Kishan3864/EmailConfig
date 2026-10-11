@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import { C, count, rows, type Campaign, type Message, type LeadList } from "@/lib/fsdb";
 import { getSettings } from "@/lib/settings";
 import { estimateFinish, capFor, priorSendingDays } from "@/lib/schedule";
-import { fullText } from "@/lib/sender";
+import { fullText } from "@/lib/compose";
+import { LOGO_HEIGHT, LOGO_PNG_BASE64, LOGO_WIDTH } from "@/lib/logo";
 import { fmt, fmtDate } from "@/lib/time";
 import { Badge, Stat } from "@/components/ui";
 import { ActionButton } from "@/components/ActionButton";
@@ -68,6 +69,10 @@ export default async function CampaignPage({ params }: { params: Promise<{ id: s
               <div>
                 <div className="text-xs text-slate-500">Subject</div><div className="font-medium mb-2">{m.subject}</div>
                 <pre className="whitespace-pre-wrap text-sm font-sans bg-slate-50 p-3 rounded">{fullText(s, m.body, m.language, list?.sourceNote || "")}</pre>
+                {s.signatureLogo && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={`data:image/png;base64,${LOGO_PNG_BASE64}`} width={LOGO_WIDTH} height={LOGO_HEIGHT} alt="Logo shown in the signature" className="mt-2 border border-slate-200 rounded" />
+                )}
               </div>
               {m.bodyEn && (
                 <div>

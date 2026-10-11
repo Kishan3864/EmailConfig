@@ -14,6 +14,7 @@ export type Settings = {
   aiBaseUrl: string; aiModel: string;
   domain: string; dkimSelector: string;
   dryRun: boolean;
+  signatureLogo: boolean; // HTML mail with the logo embedded in the signature
 };
 
 export const DEFAULTS: Settings = {
@@ -29,6 +30,7 @@ export const DEFAULTS: Settings = {
   aiBaseUrl: "https://api.openai.com/v1", aiModel: "gpt-4o-mini",
   domain: "", dkimSelector: "hostingermail-a",
   dryRun: true,
+  signatureLogo: false,
 };
 
 export async function getSettings(): Promise<Settings> {

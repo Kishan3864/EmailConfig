@@ -22,7 +22,28 @@ A single-user app that emails each lead **once ever**, slowly and automatically,
 | **On your PC** (see Local development) | Free Spark plan | `npm run dev` and `npm run worker` on your machine. Mail goes out only while the worker is running. |
 | **Live on Firebase** (below) | Blaze (pay-as-you-go) | App Hosting for the web UI, a scheduled Cloud Function for the worker. |
 
-Both use the same Firestore data, so the contacted ledger is shared.
+| **On your own server** (below) | Free Spark plan | pm2 runs the web app and the worker on a VPS, behind nginx with HTTPS. Runs 24×7. |
+
+All of them use the same Firestore data, so the contacted ledger is shared. Run the worker in one place only.
+
+## Run on your own server (VPS)
+
+Needs Node 20+, pm2 and nginx. The app only adds its own folder, two pm2 processes and one nginx site file.
+
+```bash
+git clone https://github.com/Kishan3864/EmailConfig.git ~/email.brightonsolution.com
+cd ~/email.brightonsolution.com
+# copy .env and service-account.json into this folder (they are not in git), then:
+chmod 600 .env service-account.json
+npm ci
+npm run build
+pm2 start ecosystem.config.js      # web on 127.0.0.1:3417, plus the worker
+pm2 save
+```
+
+In `.env` on the server set `COOKIE_SECURE="true"`. Point an nginx server block for your domain at `http://127.0.0.1:3417`, then issue a certificate with `certbot --nginx -d <domain>`.
+
+Update later: `git pull && npm ci && npm run build && pm2 restart outreach-web outreach-worker`.
 
 ## Firebase deployment (one time)
 

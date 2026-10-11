@@ -39,11 +39,22 @@ export async function buildRaw(opts: { s: Settings; to: string; subject: string;
   return { raw, messageId };
 }
 
-/** Send a raw message. Returns the info object from nodemailer (throws on failure). */
+/**
+ * Send a raw message. Returns the info object from nodemailer (throws on failure).
+ *
+ * Thrown errors carry `stage`, which we track ourselves because nodemailer labels every socket
+ * error, timeout and dropped connection as command "CONN", even after the message was transmitted:
+ *   "connect" -> the login check failed; no message data was sent, so the mail was certainly not accepted
+ *   "send"    -> the failure happened during the real transaction; without an explicit SMTP
+ *                rejection code the outcome is unknown
+ */
 export async function sendRaw(s: Settings, to: string, raw: Buffer) {
   const t = smtpTransport(s);
   try {
-    return await t.sendMail({ envelope: { from: s.fromEmail, to: [to] }, raw });
+    try { await t.verify(); }
+    catch (e) { throw Object.assign(e as object, { stage: "connect" }); }
+    try { return await t.sendMail({ envelope: { from: s.fromEmail, to: [to] }, raw }); }
+    catch (e) { throw Object.assign(e as object, { stage: "send" }); }
   } finally { t.close(); }
 }
 

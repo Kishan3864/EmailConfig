@@ -17,7 +17,21 @@ async function ledgerTests() {
   const { db, C, key, nowIso } = await import("../src/lib/fsdb");
   const { processRows } = await import("../src/lib/importer");
   const { addToLedger } = await import("../src/lib/ledger");
-  const { claimForSend } = await import("../src/lib/sender");
+  const { claimForSend, classify } = await import("../src/lib/sender");
+
+  // ---- SMTP outcome classification: a resend is only ever allowed after a certain refusal ----
+  check("smtp: timeout during the transaction is uncertain (never resent)", classify({ stage: "send", code: "ETIMEDOUT", command: "CONN", message: "Timeout" }), "uncertain");
+  check("smtp: connection dropped during the transaction is uncertain", classify({ stage: "send", code: "ECONNECTION", command: "CONN", message: "Connection closed unexpectedly" }), "uncertain");
+  check("smtp: socket error during the transaction is uncertain", classify({ stage: "send", code: "ESOCKET", command: "CONN" }), "uncertain");
+  check("smtp: unknown error shape is uncertain", classify({ message: "something odd" }), "uncertain");
+  check("smtp: login check failed before any data may retry later", classify({ stage: "connect", code: "ECONNECTION", command: "CONN" }), "retry");
+  check("smtp: DNS failure before any data may retry later", classify({ stage: "connect", code: "EDNS" }), "retry");
+  check("smtp: explicit 4xx reply may retry later", classify({ stage: "send", code: "EENVELOPE", command: "RCPT TO", responseCode: 450, response: "450 4.2.0 Greylisted, try again" }), "retry");
+  check("smtp: wrong password pauses everything", classify({ stage: "connect", code: "EAUTH", responseCode: 535, response: "535 authentication failed" }), "pause");
+  check("smtp: rate limit pauses everything", classify({ stage: "send", code: "EENVELOPE", responseCode: 451, response: "451 4.7.1 rate limit exceeded" }), "pause");
+  check("smtp: policy rejection pauses everything", classify({ stage: "send", code: "EMESSAGE", command: "DATA", responseCode: 554, response: "554 5.7.1 message rejected as spam" }), "pause");
+  check("smtp: unknown recipient is a hard bounce", classify({ stage: "send", code: "EENVELOPE", command: "RCPT TO", responseCode: 550, response: "550 5.1.1 user unknown" }), "hard");
+  check("smtp: unexplained 5xx pauses everything", classify({ stage: "send", code: "EMESSAGE", command: "DATA", responseCode: 554, response: "554 transaction failed" }), "pause");
 
   const wipe = async () => {
     for (const col of Object.values(C)) {

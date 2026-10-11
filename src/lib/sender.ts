@@ -9,23 +9,28 @@ import { emailDomain, siteDomain } from "./importer";
 import { partsIn } from "./time";
 import { log, event } from "./log";
 
-type SmtpErr = { code?: string; command?: string; responseCode?: number; response?: string; message?: string };
+type SmtpErr = { code?: string; command?: string; responseCode?: number; response?: string; message?: string; stage?: "connect" | "send" };
 
 /**
  * pause     -> auth / policy / rate-limit: stop everything
  * hard      -> recipient rejected permanently: bounced + suppress
- * retry     -> server clearly did NOT accept (connection refused, 4xx)
+ * retry     -> server clearly did NOT accept (login check failed before any data, or an explicit 4xx)
  * uncertain -> we cannot know if it was accepted: check manually, never resend
+ *
+ * During the real transaction (stage "send") only an explicit SMTP reply code proves a refusal.
+ * A timeout, socket error or dropped connection there is always "uncertain", whatever nodemailer calls it.
  */
 export function classify(e: SmtpErr): "pause" | "hard" | "retry" | "uncertain" {
   const text = `${e.response || ""} ${e.message || ""}`;
   const rc = e.responseCode;
-  if (e.code === "EAUTH" || rc === 530 || rc === 534 || rc === 535 || rc === 454) return "pause";
-  if (/rate|limit|too many|quota|throttl|policy|spam|block|blacklist|reputation|suspend|exceed|denied|abuse/i.test(text) && (rc || e.code === "EENVELOPE" || e.code === "EMESSAGE")) return "pause";
-  if (rc && rc >= 500 && (/^RCPT/i.test(e.command || "") || /user unknown|no such|does not exist|mailbox unavailable|invalid recipient|recipient address rejected|unknown user|not found/i.test(text))) return "hard";
-  if (rc && rc >= 400 && rc < 500) return "retry";
-  if (["ECONNECTION", "EDNS", "ESOCKET", "ETIMEDOUT", "ECONNREFUSED"].includes(e.code || "") && /^(CONN|EHLO|HELO|AUTH|MAIL)/i.test(e.command || "CONN")) return "retry";
-  if (rc && rc >= 500) return "pause"; // unexplained permanent rejection of my message: stop and look
+  const policy = /rate|limit|too many|quota|throttl|policy|spam|block|blacklist|reputation|suspend|exceed|denied|abuse/i.test(text);
+  if (e.code === "EAUTH" || e.code === "ENOAUTH" || rc === 530 || rc === 534 || rc === 535 || rc === 454) return "pause";
+  if (e.stage === "connect") return policy && rc ? "pause" : "retry"; // nothing was transmitted
+  if (!rc) return "uncertain";
+  if (policy) return "pause";
+  if (rc >= 500 && (/^RCPT/i.test(e.command || "") || /user unknown|no such|does not exist|mailbox unavailable|invalid recipient|recipient address rejected|unknown user|not found/i.test(text))) return "hard";
+  if (rc >= 400 && rc < 500) return "retry";
+  if (rc >= 500) return "pause"; // unexplained permanent rejection of my message: stop and look
   return "uncertain";
 }
 

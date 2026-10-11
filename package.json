@@ -9,26 +9,24 @@
     "worker": "tsx worker/index.ts",
     "typecheck": "tsc --noEmit",
     "migrate:settings": "tsx scripts/migrate-settings.ts",
-    "deploy:worker": "firebase deploy --only functions:outreach",
-    "deploy:web": "firebase deploy --only apphosting",
     "deploy:indexes": "firebase deploy --only firestore:indexes",
     "test:ledger": "tsx scripts/test-ledger.ts"
   },
   "dependencies": {
     "cheerio": "^1.1.2",
     "dotenv": "^16.6.1",
-    "firebase-admin": "^13.5.0",
+    "firebase-admin": "14.5.0",
     "imapflow": "^1.0.196",
     "mailparser": "^3.7.4",
-    "next": "^15.5.4",
-    "nodemailer": "^7.0.6",
+    "next": "15.5.27",
+    "nodemailer": "10.1.0",
     "papaparse": "^5.5.3",
     "pdf-parse": "^1.1.1",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
+    "react": "19.1.9",
+    "react-dom": "19.1.9",
     "robots-parser": "^3.0.1",
     "tsx": "^4.20.5",
-    "xlsx": "^0.18.5"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@types/mailparser": "^3.9.0",
@@ -39,8 +37,6 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.6.1",
-    "esbuild": "^0.25.10",
-    "firebase-functions": "^6.4.0",
     "postcss": "^8.5.29",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.9.2"

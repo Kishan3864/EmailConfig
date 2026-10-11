@@ -1,30 +1,19 @@
-# EmailConfig: cold outreach on Firebase
+# EmailConfig: self-hosted cold outreach
 
 A single-user app that emails each lead **once ever**, slowly and automatically, from your Hostinger mailbox. Each message is personalised by an AI from facts the app checks on the lead's real homepage. When the app is unsure about anything, it does not send.
 
-- **Web UI**: Next.js 15 on Firebase App Hosting
-- **Database**: Firestore, in the project's existing database. Every outreach collection is prefixed `outreach_`, so it never mixes with the website's own collections, and the website's default-deny rule keeps it server-only. This works on the free Spark plan.
-- **Worker**: a scheduled Cloud Function `outreachTick`, run every 2 minutes. It syncs the inbox, prepares AI drafts and sends at most one mail per run.
+- **Web UI**: Next.js 15, run with pm2 behind nginx on your own server
+- **Worker**: a second pm2 process. Every minute it syncs the inbox (every 10 minutes), prepares AI drafts and sends at most one mail.
+- **Database**: Firestore (free Spark plan), in the Firebase project's existing database. Every outreach collection is prefixed `outreach_`, so it never mixes with the website's own collections, and the website's default-deny rule keeps it server-only.
 - **Mail**: Nodemailer (SMTP) and imapflow (IMAP) against Hostinger
 
 ## Once-ever rule (how it is enforced)
 
-1. **Firestore `contacted` ledger.** Every address the app has ever tried to email is written here, together with its business in `contactedBiz`. Nothing in the app deletes from these collections.
+1. **Firestore `outreach_contacted` ledger.** Every address the app has ever tried to email is written here, together with its business in `outreach_contactedBiz`. Nothing in the app deletes from these collections.
 2. **Import.** Every row is checked against the ledger, existing leads and the suppression list. Matches are skipped with a visible reason. Leads are stored with the email as the document id, using create-only writes, so one address can exist only once, ever.
 3. **Send.** One Firestore transaction re-reads the ledger and the suppression list and claims the address *before* the SMTP call. If the address or its business is already in the ledger, the mail is blocked and the lead is marked `already_contacted`.
-4. **Crashes.** If a run crashes, or the server's answer is unclear, the lead becomes `check_manual` and is never resent automatically.
+4. **Unclear results.** A mail is retried (at most 2 times, on later days) only when the server certainly refused it: the login check failed before any data was sent, or the server answered with an explicit 4xx code. A timeout, dropped connection or crash during the transaction makes the lead `check_manual`, and it is never resent automatically.
 5. **Ledger page.** You can add addresses you emailed yourself, or import every recipient from the mailbox's Sent folder.
-
-## Two ways to run
-
-| | Plan needed | Where the app runs |
-|---|---|---|
-| **On your PC** (see Local development) | Free Spark plan | `npm run dev` and `npm run worker` on your machine. Mail goes out only while the worker is running. |
-| **Live on Firebase** (below) | Blaze (pay-as-you-go) | App Hosting for the web UI, a scheduled Cloud Function for the worker. |
-
-| **On your own server** (below) | Free Spark plan | pm2 runs the web app and the worker on a VPS, behind nginx with HTTPS. Runs 24×7. |
-
-All of them use the same Firestore data, so the contacted ledger is shared. Run the worker in one place only.
 
 ## Run on your own server (VPS)
 
@@ -41,41 +30,37 @@ pm2 start ecosystem.config.js      # web on 127.0.0.1:3417, plus the worker
 pm2 save
 ```
 
-In `.env` on the server set `COOKIE_SECURE="true"`. Point an nginx server block for your domain at `http://127.0.0.1:3417`, then issue a certificate with `certbot --nginx -d <domain>`.
+In `.env` on the server set `COOKIE_SECURE="true"`.
 
-Update later: `git pull && npm ci && npm run build && pm2 restart outreach-web outreach-worker`.
+nginx site (`/etc/nginx/sites-available/<domain>`), then `certbot --nginx -d <domain>`:
 
-## Firebase deployment (one time)
+```nginx
+server {
+    listen 80;
+    server_name email.brightonsolution.com;
+    client_max_body_size 25m;
 
-Requires the **Blaze** plan, which App Hosting and scheduled functions need. At this volume, usage should stay inside the free tier.
-
-```bash
-npm install
-npx firebase-tools login
-npx firebase-tools use brighton-web-ea63c
-
-# 1. Firestore indexes (indexes only: this never touches the website's security rules)
-npx firebase-tools deploy --only firestore:indexes
-
-# 2. Secrets (same names are used by the web app and the worker)
-npx firebase-tools functions:secrets:set SMTP_PASSWORD
-npx firebase-tools functions:secrets:set AI_API_KEY
-npx firebase-tools apphosting:secrets:set APP_PASSWORD
-npx firebase-tools apphosting:secrets:set SESSION_SECRET
-
-# 3. Worker (scheduled function)
-cd functions && npm install && cd ..
-npx firebase-tools deploy --only functions:outreach
-
-# 4. Web UI
-npx firebase-tools apphosting:backends:create --backend outreach --primary-region asia-south1
-npx firebase-tools apphosting:secrets:grantaccess SMTP_PASSWORD,AI_API_KEY,APP_PASSWORD,SESSION_SECRET --backend outreach
-npx firebase-tools deploy --only apphosting
+    location / {
+        proxy_pass http://127.0.0.1:3417;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+    }
+}
 ```
 
-Redeploy after changes: `npm run deploy:worker` and `npm run deploy:web`.
+The `Host`, `X-Real-IP` and `X-Forwarded-Proto` headers are required: the app uses them for login redirects and for the login rate limit.
 
-Note: if the website repo ever deploys Firestore indexes with `--force`, it would delete the `outreach_*` indexes. Sending then stops with errors (it does not send wrongly). Re-run `npm run deploy:indexes` to restore them.
+Update later:
+
+```bash
+cd ~/email.brightonsolution.com && git pull && npm ci && npm run build && pm2 restart outreach-web outreach-worker
+```
+
+Run the worker in one place only. A Firestore lock and the ledger prevent double sends even if two run, but one is cleaner.
 
 ## Local development
 
@@ -84,14 +69,22 @@ Note: if the website repo ever deploys Firestore indexes with `--force`, it woul
 3. Run:
 
 ```bash
-npm run migrate:settings   # one time: copies settings from the old local SQLite DB into Firestore
 npm run dev                # http://localhost:3001
-npm run worker             # local worker (do not run it while the Cloud Function is deployed; the Firestore lock prevents double sends anyway)
+npm run worker             # only if the server worker is not running
 ```
+
+Checks (no email is sent):
+
+```bash
+npm run test:ledger            # once-ever rule and SMTP outcome rules, in throw-away test collections
+npm run test:ledger indexes    # read-only: every indexed query the app uses
+```
+
+Firestore indexes live in `firestore.indexes.json`. Deploy them with `npm run deploy:indexes` (indexes only; this never touches the website's security rules). If the website repo ever deploys indexes with `--force`, the `outreach_*` indexes are deleted and sending stops with errors (it does not send wrongly); re-run the command to restore them.
 
 ## First-time checklist
 
-1. **Settings**: fill in your test address, alert address, sender profile and offer notes. Click **Send test mail to me** and **Check DNS**.
+1. **Settings**: fill in your test address, alert address, sender profile, postal address and offer notes. Click **Send test mail to me** and **Check DNS**.
 2. **Ledger → Import Sent folder recipients**, so that nobody you already emailed gets a cold mail.
 3. Leave **Dry-run** on for the first campaign. Mails then go only to your test address.
 4. **Import** a list, check the preview, then confirm. Approve any **needs_review** addresses under Contacts.
@@ -107,4 +100,4 @@ npm run worker             # local worker (do not run it while the Cloud Functio
 
 ## Backup
 
-Firestore keeps the data. For an extra copy, use the CSV export on the Contacts page, or `gcloud firestore export gs://<bucket> --collection-ids=outreach_contacted,outreach_leads,outreach_messages` (needs Blaze).
+Firestore keeps the data. For an extra copy, use the CSV export on the Contacts page.

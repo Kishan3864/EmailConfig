@@ -56,6 +56,39 @@ async function nextMessage(c: Campaign, dryRun: boolean, now: Date): Promise<Mes
   return m.find((x) => x.status === "ready" || (x.nextAttemptAt && new Date(x.nextAttemptAt) <= now)) || null;
 }
 
+/**
+ * ONCE-EVER GATE. One transaction, run BEFORE the SMTP call:
+ * re-reads the permanent ledger and the suppression list, and only if the address and its
+ * business were never contacted does it write the ledger entries and mark the message "sending".
+ *  ok         -> claimed, the caller may send
+ *  blocked    -> address or business is already in the ledger: never sent
+ *  suppressed -> address or domain is on the suppression list: never sent
+ *  lost       -> message/lead changed meanwhile (another worker, pause, review): not sent now
+ */
+export async function claimForSend(msg: Pick<Message, "id" | "status">, lead: Pick<Lead, "id" | "email" | "businessKey" | "website">, campaignId: string) {
+  const msgRef = C.messages.doc(msg.id);
+  const leadRef = C.leads.doc(lead.id);
+  const emailRef = C.contacted.doc(key(lead.email));
+  const bizRef = C.contactedBiz.doc(key(lead.businessKey));
+  const suppRefs = [...new Set([lead.email, emailDomain(lead.email), siteDomain(lead.website)].filter(Boolean))].map((v) => C.suppression.doc(key(v)));
+  return db.runTransaction(async (tx) => {
+    const [m, l, ce, cb, ...supp] = await tx.getAll(msgRef, leadRef, emailRef, bizRef, ...suppRefs);
+    if (!m.exists || m.get("status") !== msg.status || l.get("status") !== "ready") return "lost" as const;
+    if (supp.some((x) => x.exists)) { tx.update(leadRef, { status: "suppressed", updatedAt: nowIso() }); return "suppressed" as const; }
+    // the ledger may only already hold this address if it was claimed by THIS message (a retry after a clear refusal)
+    if ((ce.exists && ce.get("messageRef") !== msg.id) || (cb.exists && cb.get("messageRef") !== msg.id)) {
+      tx.update(leadRef, { status: "already_contacted", updatedAt: nowIso() });
+      tx.update(msgRef, { status: "blocked", error: "address or business already in the contacted ledger" });
+      return "blocked" as const;
+    }
+    const entry = { status: "sending", source: "outreach", leadId: lead.id, messageRef: msg.id, campaignId, at: ce.exists ? ce.get("at") : nowIso(), updatedAt: nowIso() };
+    tx.set(emailRef, { email: lead.email, ...entry }, { merge: true });
+    tx.set(bizRef, { businessKey: lead.businessKey, email: lead.email, ...entry }, { merge: true });
+    tx.update(msgRef, { status: "sending", attempts: FieldValue.increment(1), sendStartedAt: nowIso() });
+    return "ok" as const;
+  });
+}
+
 /** Try to send exactly one mail. Called by the worker tick. */
 export async function trySendOne(): Promise<string> {
   if (!(await canSend())) return "stopped";
@@ -101,26 +134,8 @@ export async function trySendOne(): Promise<string> {
     }
 
     // ---------- LIVE: ledger check + claim in ONE transaction, BEFORE the SMTP call ----------
-    const emailRef = C.contacted.doc(key(lead.email));
-    const bizRef = C.contactedBiz.doc(key(lead.businessKey));
-    const suppRefs = [...new Set([lead.email, emailDomain(lead.email), siteDomain(lead.website)].filter(Boolean))].map((v) => C.suppression.doc(key(v)));
     const msgRef = C.messages.doc(msg.id);
-    const claim = await db.runTransaction(async (tx) => {
-      const [m, l, ce, cb, ...supp] = await tx.getAll(msgRef, leadSnap.ref, emailRef, bizRef, ...suppRefs);
-      if (!m.exists || m.get("status") !== msg.status || l.get("status") !== "ready") return "lost";
-      if (supp.some((x) => x.exists)) { tx.update(l.ref, { status: "suppressed", updatedAt: nowIso() }); return "suppressed"; }
-      // the ledger may only already hold this address if it was claimed by THIS message (a retry after a clear refusal)
-      if ((ce.exists && ce.get("messageRef") !== msg.id) || (cb.exists && cb.get("messageRef") !== msg.id)) {
-        tx.update(l.ref, { status: "already_contacted", updatedAt: nowIso() });
-        tx.update(msgRef, { status: "blocked", error: "address or business already in the contacted ledger" });
-        return "blocked";
-      }
-      const entry = { status: "sending", source: "outreach", leadId: lead.id, messageRef: msg.id, campaignId: c.id, at: ce.exists ? ce.get("at") : nowIso(), updatedAt: nowIso() };
-      tx.set(emailRef, { email: lead.email, ...entry }, { merge: true });
-      tx.set(bizRef, { businessKey: lead.businessKey, email: lead.email, ...entry }, { merge: true });
-      tx.update(msgRef, { status: "sending", attempts: FieldValue.increment(1), sendStartedAt: nowIso() });
-      return "ok";
-    });
+    const claim = await claimForSend(msg, lead, c.id);
     if (claim !== "ok") {
       await event(lead.id, "skipped", `not sent: ${claim}`);
       if (claim !== "lost") await log("warn", "send", `${lead.email} not sent: ${claim}`);

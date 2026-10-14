@@ -6,7 +6,7 @@ const COLORS: Record<string, string> = {
   draft: "bg-slate-100 text-slate-700", done: "bg-indigo-100 text-indigo-800", send: "bg-emerald-100 text-emerald-800",
   skip: "bg-slate-200 text-slate-600", review: "bg-amber-100 text-amber-800", retry: "bg-amber-100 text-amber-800",
   info: "bg-slate-100 text-slate-700", warn: "bg-amber-100 text-amber-800", error: "bg-red-100 text-red-800",
-  reply: "bg-violet-100 text-violet-800", optout: "bg-orange-100 text-orange-800", bounce: "bg-red-100 text-red-800", auto: "bg-slate-100 text-slate-600",
+  "dry-run": "bg-amber-100 text-amber-800", reply: "bg-violet-100 text-violet-800", optout: "bg-orange-100 text-orange-800", bounce: "bg-red-100 text-red-800", auto: "bg-slate-100 text-slate-600",
 };
 export function Badge({ v }: { v: string }) {
   return <span className={`badge ${COLORS[v] || ""}`}>{v.replace(/_/g, " ")}</span>;

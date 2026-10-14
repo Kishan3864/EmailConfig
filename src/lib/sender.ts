@@ -45,12 +45,13 @@ const setLedger = (email: string, bizKey: string, status: string, extra: Record<
     C.contactedBiz.doc(key(bizKey)).set({ status, updatedAt: nowIso() }, { merge: true }),
   ]);
 
-async function nextMessage(c: Campaign, dryRun: boolean, now: Date): Promise<Message | null> {
+/** Next mail of a campaign that may go out now: only approved drafts are ever returned. */
+export async function nextMessage(c: Pick<Campaign, "id">, dryRun: boolean, now: Date): Promise<Message | null> {
   if (dryRun) {
-    const m = await C.messages.where("campaignId", "==", c.id).where("status", "==", "ready").where("dryRunDone", "==", false).orderBy("createdAt").limit(1).get();
+    const m = await C.messages.where("campaignId", "==", c.id).where("status", "==", "ready").where("dryRunDone", "==", false).where("approved", "==", true).orderBy("createdAt").limit(1).get();
     return rows<Message>(m)[0] || null;
   }
-  const m = rows<Message>(await C.messages.where("campaignId", "==", c.id).where("status", "in", ["ready", "retry"]).orderBy("createdAt").limit(30).get());
+  const m = rows<Message>(await C.messages.where("campaignId", "==", c.id).where("status", "in", ["ready", "retry"]).where("approved", "==", true).orderBy("createdAt").limit(30).get());
   return m.find((x) => x.status === "ready" || (x.nextAttemptAt && new Date(x.nextAttemptAt) <= now)) || null;
 }
 
@@ -108,6 +109,8 @@ export async function trySendOne(): Promise<string> {
     if (lead.status !== "ready") continue;
     const list = (await C.lists.doc(lead.listId).get()).data() as LeadList | undefined;
     const parts = mailParts(s, msg.body, msg.language, list?.sourceNote || "a public business directory");
+    // what the Sent page shows: the subject and the full text exactly as they went out
+    const record = { subject: msg.subject, text: parts.text, withLogo: !!parts.html, business: lead.businessName || null, leadEmail: lead.email, campaignId: c.id };
     const gapMin = s.gapMinMin + Math.random() * Math.max(0, s.gapMaxMin - s.gapMinMin);
 
     // ---------- DRY RUN: everything runs, delivery only to my test address ----------
@@ -116,14 +119,14 @@ export async function trySendOne(): Promise<string> {
       const { raw } = await buildRaw({ s, to: s.testEmail, subject: `[DRY RUN → ${lead.email}] ${msg.subject}`, ...parts, listUnsub: true });
       try {
         const info = await sendRaw(s, s.testEmail, raw);
-        await C.sendLogs.add({ messageId: msg.id, leadId: lead.id, to: s.testEmail, dryRun: true, ok: true, response: String(info.response), at: nowIso() });
+        await C.sendLogs.add({ messageId: msg.id, leadId: lead.id, to: s.testEmail, dryRun: true, ok: true, response: String(info.response), at: nowIso(), ...record });
         await C.messages.doc(msg.id).update({ dryRunDone: true });
         await setLead(lead.id, { dryRunAt: nowIso() });
         await event(lead.id, "dry_run", `delivered to test address: ${info.response}`);
         await log("info", "send", `DRY RUN ${lead.email} -> ${s.testEmail}: ${info.response}`);
       } catch (e) {
         const err = e as SmtpErr;
-        await C.sendLogs.add({ messageId: msg.id, leadId: lead.id, to: s.testEmail, dryRun: true, ok: false, response: `${err.code || ""} ${err.response || err.message}`, at: nowIso() });
+        await C.sendLogs.add({ messageId: msg.id, leadId: lead.id, to: s.testEmail, dryRun: true, ok: false, response: `${err.code || ""} ${err.response || err.message}`, at: nowIso(), ...record });
         if (classify(err) === "pause") await emergencyStop(`SMTP error (dry run): ${err.response || err.message}`);
         else await log("warn", "send", `dry-run send failed: ${err.response || err.message}`);
       }
@@ -149,9 +152,9 @@ export async function trySendOne(): Promise<string> {
     if (info && info.accepted?.length && !info.rejected?.length) {
       const response = String(info.response);
       const b = db.batch();
-      b.update(msgRef, { status: "sent", sentAt: nowIso(), smtpResponse: response, messageId });
+      b.update(msgRef, { status: "sent", sentAt: nowIso(), smtpResponse: response, messageId, sentText: parts.text, sentWithLogo: !!parts.html });
       b.update(leadSnap.ref, { status: "sent", updatedAt: nowIso() });
-      b.create(C.sendLogs.doc(), { messageId: msg.id, leadId: lead.id, to: lead.email, dryRun: false, ok: true, response, at: nowIso() });
+      b.create(C.sendLogs.doc(), { messageId: msg.id, leadId: lead.id, to: lead.email, dryRun: false, ok: true, response, at: nowIso(), ...record });
       await b.commit();
       await setLedger(lead.email, lead.businessKey, "sent", { sentAt: nowIso() });
       await addSendDay(c.timezone, partsIn(now, c.timezone).dayKey);
@@ -166,12 +169,12 @@ export async function trySendOne(): Promise<string> {
     const err = error || { message: "unknown result" };
     const kind = classify(err);
     const response = `${err.code || ""} ${err.command || ""} ${err.responseCode || ""} ${err.response || err.message || ""}`.trim();
-    await C.sendLogs.add({ messageId: msg.id, leadId: lead.id, to: lead.email, dryRun: false, ok: false, hardBounce: kind === "hard", response, at: nowIso() });
+    await C.sendLogs.add({ messageId: msg.id, leadId: lead.id, to: lead.email, dryRun: false, ok: false, hardBounce: kind === "hard", response, at: nowIso(), ...record });
     await event(lead.id, "smtp_error", `${kind}: ${response}`);
     await log(kind === "retry" ? "warn" : "error", "send", `${lead.email} ${kind}: ${response}`);
 
     if (kind === "uncertain") {
-      await msgRef.update({ status: "check_manual", error: response });
+      await msgRef.update({ status: "check_manual", error: response, sentText: parts.text, sentWithLogo: !!parts.html });
       await setLead(lead.id, { status: "check_manual" });
       await setLedger(lead.email, lead.businessKey, "uncertain");
     } else if (kind === "hard") {

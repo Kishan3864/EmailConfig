@@ -3,7 +3,7 @@
 //   npm run test:ledger indexes    read-only: runs every indexed query the app uses against the real collections
 import "dotenv/config";
 
-const MODE = process.argv[2] === "indexes" ? "indexes" : "ledger";
+const MODE = ["indexes", "gating"].includes(process.argv[2]) ? process.argv[2] : "ledger";
 if (MODE === "ledger") process.env.FIRESTORE_PREFIX = "outreachtest_";
 
 let failed = 0;
@@ -116,8 +116,11 @@ async function indexTests() {
     ["campaigns: sent count", () => count(C.leads.where("campaignId", "==", "x").where("status", "in", ["sent", "replied"]))],
     ["contacts: by status, newest first", () => C.leads.where("status", "==", "ready").orderBy("updatedAt", "desc").limit(1).get()],
     ["contacts: newest first", () => C.leads.orderBy("updatedAt", "desc").limit(1).get()],
-    ["sender: next message (dry-run)", () => C.messages.where("campaignId", "==", "x").where("status", "==", "ready").where("dryRunDone", "==", false).orderBy("createdAt").limit(1).get()],
-    ["sender: next message (live)", () => C.messages.where("campaignId", "==", "x").where("status", "in", ["ready", "retry"]).orderBy("createdAt").limit(1).get()],
+    ["sender: next approved message (dry-run)", () => C.messages.where("campaignId", "==", "x").where("status", "==", "ready").where("dryRunDone", "==", false).where("approved", "==", true).orderBy("createdAt").limit(1).get()],
+    ["sender: next approved message (live)", () => C.messages.where("campaignId", "==", "x").where("status", "in", ["ready", "retry"]).where("approved", "==", true).orderBy("createdAt").limit(1).get()],
+    ["approve page: drafts waiting", () => C.messages.where("approved", "==", false).where("status", "==", "ready").orderBy("createdAt").limit(1).get()],
+    ["dashboard: live sends today", () => count(C.sendLogs.where("ok", "==", true).where("at", ">=", t).where("dryRun", "==", false))],
+    ["sent page: one day", () => C.sendLogs.where("at", ">=", t).where("at", "<", "2100-01-01").orderBy("at", "desc").limit(1).get()],
     ["campaign page: latest messages", () => C.messages.where("campaignId", "==", "x").orderBy("createdAt", "desc").limit(1).get()],
     ["guard: last 50 sends", () => C.messages.orderBy("sentAt", "desc").limit(1).get()],
     ["dashboard: total sent", () => count(C.messages.where("status", "in", ["sent", "bounced"]))],
@@ -137,7 +140,34 @@ async function indexTests() {
   }
 }
 
-(MODE === "indexes" ? indexTests() : ledgerTests()).then(
+// Approval gate on the real collections: a PAUSED test campaign (invisible to any worker), deleted afterwards. Nothing is sent.
+async function gatingTests() {
+  const { C, nowIso } = await import("../src/lib/fsdb");
+  const { nextMessage } = await import("../src/lib/sender");
+  const camp = await C.campaigns.add({ name: "gating self-test (auto-deleted)", listId: "none", timezone: "Asia/Kolkata", language: "en", status: "paused", samplesApproved: false, createdAt: nowIso() });
+  const base = { campaignId: camp.id, language: "en", subject: "s", body: "b", attempts: 0, dryRunDone: false };
+  const a = C.messages.doc("gating-selftest-a"), b = C.messages.doc("gating-selftest-b");
+  try {
+    await a.set({ ...base, leadId: "gating-selftest-a", status: "ready", approved: false, createdAt: "2000-01-01T00:00:00.000Z" });
+    await b.set({ ...base, leadId: "gating-selftest-b", status: "ready", approved: false, createdAt: "2000-01-02T00:00:00.000Z" });
+    const now = new Date();
+    check("gate: nothing approved -> nothing to send (dry-run)", (await nextMessage(camp, true, now))?.id ?? null, null);
+    check("gate: nothing approved -> nothing to send (live)", (await nextMessage(camp, false, now))?.id ?? null, null);
+    await b.update({ approved: true });
+    check("gate: only the approved mail is picked, even though an older unapproved one exists (dry-run)", (await nextMessage(camp, true, now))?.id ?? null, "gating-selftest-b");
+    check("gate: only the approved mail is picked (live)", (await nextMessage(camp, false, now))?.id ?? null, "gating-selftest-b");
+    await b.update({ dryRunDone: true });
+    check("gate: after its dry-run the same approved mail is next in LIVE mode", (await nextMessage(camp, false, now))?.id ?? null, "gating-selftest-b");
+    check("gate: dry-run does not repeat a mail already delivered to the test address", (await nextMessage(camp, true, now))?.id ?? null, null);
+    await b.update({ status: "rejected", approved: false });
+    check("gate: rejected mail is never picked", (await nextMessage(camp, false, now))?.id ?? null, null);
+  } finally {
+    await Promise.all([a.delete(), b.delete(), camp.delete()]);
+    console.log("gating test docs deleted");
+  }
+}
+
+(MODE === "indexes" ? indexTests() : MODE === "gating" ? gatingTests() : ledgerTests()).then(
   () => { console.log(failed ? `\n${failed} FAILED` : "\nALL PASSED"); process.exit(failed ? 1 : 0); },
   (e) => { console.error(e); process.exit(1); },
 );

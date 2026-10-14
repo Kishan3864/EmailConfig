@@ -91,7 +91,8 @@ export default async function SettingsPage() {
               <F name="warmMax" label="Max per day" value={s.warmMax} type="number" />
               <F name="planDailyLimit" label="Mailbox plan daily limit" value={s.planDailyLimit} type="number" hint={`Never more than 40% = ${Math.floor(s.planDailyLimit * 0.4)}/day`} />
             </div>
-            <C name="dryRun" label="DRY-RUN mode (deliver only to my test address)" checked={s.dryRun} />
+            <C name="approveEach" label="Approve every mail before it is sent (Approve page)" checked={s.approveEach} />
+            <p className="text-xs text-slate-500">Mode: <b>{s.dryRun ? "DRY-RUN (mails go only to your test address)" : "LIVE"}</b>. Change it on the Dashboard.</p>
           </section>
 
           <section className="card space-y-3">

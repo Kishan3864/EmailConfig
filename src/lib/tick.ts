@@ -6,6 +6,7 @@ import { ensureDrafts } from "./drafts";
 import { syncInbox } from "./inbox";
 import { inWindow } from "./schedule";
 import { log } from "./log";
+import { dailyReport } from "./report";
 
 const SYNC_MS = 10 * 60_000;
 const LEASE_MS = 8 * 60_000;
@@ -42,15 +43,18 @@ export async function runTick(): Promise<string> {
         await setState({ lastSyncAt: nowIso() }); // try again in 10 min
       });
     }
-    // drafts only while some running campaign is inside (or 30 min before) its sending window
+    // drafts: in approval mode any time (the queue is capped), otherwise only near a sending window
     const s = await getSettings();
     const running = (await C.campaigns.where("status", "==", "running").get()).docs;
     const soon = new Date(Date.now() + 30 * 60000);
-    if (!st.globalStop && !st.alert && running.some((c) => inWindow(new Date(), s, c.get("timezone")) || inWindow(soon, s, c.get("timezone")))) {
+    const nearWindow = running.some((c) => inWindow(new Date(), s, c.get("timezone")) || inWindow(soon, s, c.get("timezone")));
+    // approval mode prepares drafts ahead of time so they can be reviewed before the window opens
+    if (!st.globalStop && !st.alert && running.length && (s.approveEach || nearWindow)) {
       await ensureDrafts().catch((e) => log("error", "ai", `ensureDrafts: ${e instanceof Error ? e.message : e}`));
     }
     const r = await trySendOne();
     await closeFinishedCampaigns();
+    await dailyReport().catch((e) => log("warn", "report", `daily report failed: ${e instanceof Error ? e.message : e}`));
     return r;
   } catch (e) {
     await log("error", "worker", e instanceof Error ? e.stack || e.message : String(e));

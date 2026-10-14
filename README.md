@@ -82,6 +82,13 @@ npm run test:ledger indexes    # read-only: every indexed query the app uses
 
 Firestore indexes live in `firestore.indexes.json`. Deploy them with `npm run deploy:indexes` (indexes only; this never touches the website's security rules). If the website repo ever deploys indexes with `--force`, the `outreach_*` indexes are deleted and sending stops with errors (it does not send wrongly); re-run the command to restore them.
 
+## What goes out, and how to see it
+
+- **Approve page.** With "Approve every mail" on (Settings, on by default), every AI draft waits here. You see the full mail with signature and footer, the English translation, and the homepage facts the AI used. You can Approve it, edit it (the edit is checked by the same rules), write a new version, or Reject it (that lead is then never emailed). Only approved mails can be sent.
+- **Mode switch (Dashboard).** DRY-RUN sends approved mails only to your test address; LIVE sends them to the leads. The switch asks for a second click, and saving Settings never changes the mode. A mail that already went to your test address in dry-run goes to the lead, with the same text, once you switch to live.
+- **Sent page.** Choose a day to see how many mails went to leads, how many dry-run mails went to you, and what failed. Each entry shows the subject and the full text exactly as sent, plus the server's reply. Every live mail also has a copy in the mailbox's Sent folder.
+- **Daily report.** After 23:00 IST, on days with any activity, the alert address gets a summary: counts, every mail sent (time, recipient, subject), failures, replies, opt-outs, bounces, and drafts waiting for approval.
+
 ## First-time checklist
 
 1. **Settings**: fill in your test address, alert address, sender profile, postal address and offer notes. Click **Send test mail to me** and **Check DNS**.

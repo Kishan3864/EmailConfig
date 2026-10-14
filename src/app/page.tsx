@@ -2,10 +2,10 @@ import Link from "next/link";
 import { C, count, rows, type Campaign } from "@/lib/fsdb";
 import { getSettings, getState } from "@/lib/settings";
 import { capFor, priorSendingDays, sentToday, estimateFinish, nextWindowOpen } from "@/lib/schedule";
-import { fmt, fmtDate } from "@/lib/time";
+import { fmt, fmtDate, dayStart, DISPLAY_TZ } from "@/lib/time";
 import { Stat, Badge } from "@/components/ui";
 import { ActionButton } from "@/components/ActionButton";
-import { globalStopAction, clearStopAction } from "./actions";
+import { globalStopAction, clearStopAction, setModeAction } from "./actions";
 
 export default async function Dashboard() {
   const s = await getSettings();
@@ -19,6 +19,12 @@ export default async function Dashboard() {
   const byStatus = async (status: string) => count(C.leads.where("status", "==", status));
   const [sent, replied, bounced, optedOut, review, manual, ledger] = await Promise.all([
     count(C.messages.where("status", "in", ["sent", "bounced"])), byStatus("replied"), byStatus("bounced"), byStatus("opted_out"), byStatus("needs_review"), byStatus("check_manual"), count(C.contacted),
+  ]);
+  const istToday = dayStart(new Date(), DISPLAY_TZ).toISOString();
+  const [liveToday, dryToday, waiting] = await Promise.all([
+    count(C.sendLogs.where("ok", "==", true).where("at", ">=", istToday).where("dryRun", "==", false)),
+    count(C.sendLogs.where("ok", "==", true).where("at", ">=", istToday).where("dryRun", "==", true)),
+    count(C.messages.where("approved", "==", false).where("status", "==", "ready")),
   ]);
   const last50 = (await C.messages.orderBy("sentAt", "desc").limit(50).get()).docs.map((d) => d.get("status"));
   const bounceRate = last50.length ? last50.filter((x) => x === "bounced").length / last50.length : 0;
@@ -70,6 +76,23 @@ export default async function Dashboard() {
             ? <ActionButton action={clearStopAction} label="Clear stop / alert" confirmText="Click again: I fixed the cause" />
             : <ActionButton action={globalStopAction} label="■ STOP ALL SENDING" className="btn-danger" />}
         </div>
+      </div>
+
+      <div className={`rounded-xl p-4 flex flex-wrap items-center gap-4 ${s.dryRun ? "bg-amber-50 border border-amber-200" : "bg-emerald-50 border border-emerald-200"}`}>
+        <div>
+          <div className="font-semibold">{s.dryRun ? "DRY-RUN mode" : "LIVE mode"}</div>
+          <div className="text-sm text-slate-600">{s.dryRun ? `Approved mails go only to your test address (${s.testEmail || "not set"}). No lead receives anything.` : "Approved mails go to real leads, inside the sending window."}{s.approveEach ? " Every mail needs your approval first." : " Drafts are approved automatically."}</div>
+        </div>
+        <div className="ml-auto">
+          {s.dryRun
+            ? <ActionButton action={setModeAction.bind(null, true)} label="Go LIVE" className="btn-primary" confirmText="Click again: approved mails will go to real leads" />
+            : <ActionButton action={setModeAction.bind(null, false)} label="Back to dry-run" />}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <Stat label="Sent to leads today" value={<Link href="/sent" className="text-indigo-600">{liveToday}</Link>} sub={`dry-run today: ${dryToday} · IST day`} />
+        <Stat label="Waiting for your approval" value={<Link href="/review" className={waiting ? "text-amber-700" : "text-indigo-600"}>{waiting}</Link>} sub="nothing is sent before you approve" />
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

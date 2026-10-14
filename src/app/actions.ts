@@ -10,6 +10,7 @@ import { syncInbox } from "@/lib/inbox";
 import { addToLedger, importSentFolder } from "@/lib/ledger";
 import { log, event } from "@/lib/log";
 import { chat } from "@/lib/ai";
+import { validateDraft } from "@/lib/validate";
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const setLead = (id: string, data: Record<string, unknown>) => C.leads.doc(id).update({ ...data, updatedAt: nowIso() });
@@ -19,6 +20,7 @@ export async function saveSettingsAction(fd: FormData) {
   const out: Record<string, unknown> = {};
   for (const [k, def] of Object.entries(DEFAULTS)) {
     if (k === "sendDays") { out[k] = fd.getAll("sendDays").map(Number); continue; }
+    if (k === "dryRun") continue; // only the Dashboard switch changes the mode, never a settings save
     if (typeof def === "boolean") { out[k] = fd.get(k) === "on"; continue; }
     const v = fd.get(k);
     if (v === null) continue;
@@ -157,6 +159,7 @@ export async function regenerateDraft(messageId: string) {
   await C.draftJobs.doc(messageId).delete().catch(() => {});
   const r = await draftForLead(messageId);
   revalidatePath(`/campaigns/${m.get("campaignId")}`);
+  revalidatePath("/review");
   return r.ok ? "Regenerated" : "Error: " + r.error;
 }
 
@@ -171,6 +174,9 @@ export async function startCampaign(id: string) {
   const ready = await count(C.leads.where("campaignId", "==", id).where("status", "==", "ready"));
   if (drafts < Math.min(5, ready)) return "Error: generate and review the 5 sample drafts first";
   await C.campaigns.doc(id).update({ status: "running", samplesApproved: true, startedAt: nowIso() });
+  // the samples I just read count as approved
+  const samples = await C.messages.where("campaignId", "==", id).where("status", "==", "ready").get();
+  for (const m of samples.docs) if (!m.get("approved")) await m.ref.update({ approved: true, approvedAt: nowIso() });
   await log("info", "campaign", `campaign ${id} approved and started${s.dryRun ? " (DRY RUN)" : ""}`);
   revalidatePath(`/campaigns/${id}`);
   return s.dryRun ? "Started in DRY-RUN mode (mails go to your test address)" : "Started. The worker sends automatically.";
@@ -189,4 +195,57 @@ export async function resumeCampaign(id: string) {
   await log("info", "campaign", `campaign ${id} resumed`);
   revalidatePath(`/campaigns/${id}`);
   return "Running (worker respects global stop and alerts)";
+}
+
+// ---------------- mode switch (Dashboard only) ----------------
+export async function setModeAction(live: boolean) {
+  const s = await getSettings();
+  if (live && !s.testEmail) return "Error: set your test address first";
+  await saveSettings({ dryRun: !live });
+  await log("warn", "control", live ? "LIVE mode switched ON: approved mails now go to real leads" : "back to DRY-RUN mode");
+  revalidatePath("/");
+  return live ? "LIVE: approved mails now go to real leads" : "DRY-RUN: mails go only to your test address";
+}
+
+// ---------------- per-mail approval ----------------
+export async function approveMessage(id: string) {
+  const ref = C.messages.doc(id);
+  const m = await ref.get();
+  if (!m.exists || m.get("status") !== "ready") return "Not waiting for approval";
+  await ref.update({ approved: true, approvedAt: nowIso() });
+  await event(id, "approved_mail", "mail approved for sending");
+  revalidatePath("/review");
+  return "Approved";
+}
+
+export async function approveAllShown(ids: string[]) {
+  let n = 0;
+  for (const id of ids) if ((await approveMessage(id)) === "Approved") n++;
+  revalidatePath("/review");
+  return `${n} approved`;
+}
+
+export async function rejectMessage(id: string) {
+  const ref = C.messages.doc(id);
+  const m = await ref.get();
+  if (!m.exists || m.get("status") !== "ready") return "Not waiting for approval";
+  await ref.update({ status: "rejected", approved: false });
+  await setLead(id, { status: "rejected" });
+  await event(id, "rejected_mail", "mail rejected: this lead will not be emailed");
+  revalidatePath("/review");
+  return "Rejected: this lead will not be emailed";
+}
+
+export async function saveDraftEdit(id: string, fd: FormData) {
+  const ref = C.messages.doc(id);
+  const m = await ref.get();
+  if (!m.exists || m.get("status") !== "ready") return "Error: not editable";
+  const subject = String(fd.get("subject") || "").trim();
+  const body = String(fd.get("body") || "").replace(/\r/g, "").trim();
+  const errors = validateDraft(subject, body, m.get("language"), m.get("businessName") || "");
+  if (errors.length) return "Error: " + errors.join("; ");
+  await ref.update({ subject, body, subjectEn: null, bodyEn: null, edited: true, approved: false, approvedAt: null });
+  await event(id, "edited", "draft edited by hand");
+  revalidatePath("/review");
+  return "Saved. Read it once more, then approve.";
 }

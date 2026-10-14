@@ -15,6 +15,7 @@ export type Settings = {
   domain: string; dkimSelector: string;
   dryRun: boolean;
   signatureLogo: boolean; // HTML mail with the logo embedded in the signature
+  approveEach: boolean; // every draft must be approved by me before it can be sent
 };
 
 export const DEFAULTS: Settings = {
@@ -31,6 +32,7 @@ export const DEFAULTS: Settings = {
   domain: "", dkimSelector: "hostingermail-a",
   dryRun: true,
   signatureLogo: false,
+  approveEach: true,
 };
 
 export async function getSettings(): Promise<Settings> {
@@ -50,12 +52,12 @@ export type State = {
   lastSyncAt: string | null; lastWorkerTick: string | null;
   aiBackoffUntil: string | null;
   dns: { spf: boolean; dkim: boolean; dmarc: boolean; detail: string; at: string } | null;
-  sendDays: string[]; lastDraftAt: string | null;
+  sendDays: string[]; lastDraftAt: string | null; lastSummaryDay: string | null;
 };
 
 const STATE_DEFAULT: State = {
   globalStop: false, alert: null, nextSendAt: null, imapUidValidity: null, imapLastUid: 0,
-  lastSyncAt: null, lastWorkerTick: null, aiBackoffUntil: null, dns: null, sendDays: [], lastDraftAt: null,
+  lastSyncAt: null, lastWorkerTick: null, aiBackoffUntil: null, dns: null, sendDays: [], lastDraftAt: null, lastSummaryDay: null,
 };
 
 export async function getState(): Promise<State> {

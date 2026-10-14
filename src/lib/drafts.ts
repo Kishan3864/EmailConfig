@@ -3,8 +3,10 @@ import { getSettings, getState, setState } from "./settings";
 import { fetchFacts, type Facts } from "./facts";
 import { generateDraft } from "./ai";
 import { log, event } from "./log";
+import { todayCap } from "./schedule";
 
 const BATCH = 3; // keep only a few drafts ready ahead of sending (free API limits)
+const PER_TICK = 3; // at most this many AI calls per worker cycle
 
 /** Generate + validate a draft for one lead. A draft is stored only if it passes validation. */
 export async function draftForLead(leadId: string): Promise<{ ok: boolean; error?: string }> {
@@ -33,6 +35,8 @@ export async function draftForLead(leadId: string): Promise<{ ok: boolean; error
     await C.messages.doc(leadId).create({
       leadId, leadEmail: lead.email, businessName: lead.businessName || null, campaignId: campaign.id, language: campaign.language,
       subject: d.subject, body: d.body, subjectEn: d.subjectEn, bodyEn: d.bodyEn, status: "ready", attempts: 0, dryRunDone: false, createdAt: nowIso(),
+      // with "approve every mail" on, nothing can be sent until I approve it on the Approve page
+      approved: !s.approveEach, approvedAt: s.approveEach ? null : nowIso(),
     });
     await ld.ref.update({ hasMessage: true });
     await jobRef.delete().catch(() => {});
@@ -56,19 +60,24 @@ export async function ensureDrafts() {
   if (st.aiBackoffUntil && new Date(st.aiBackoffUntil) > new Date()) return;
   const s = await getSettings();
   const campaigns = rows<Campaign>(await C.campaigns.where("status", "==", "running").get());
+  let budget = PER_TICK;
   for (const c of campaigns) {
+    if (budget <= 0) return;
+    // approval mode: prepare a whole day's worth so I can review them in one go
+    const target = s.approveEach ? Math.max(BATCH, await todayCap(s, c.timezone)) : BATCH;
     let q = C.messages.where("campaignId", "==", c.id).where("status", "==", "ready");
     if (s.dryRun) q = q.where("dryRunDone", "==", false);
-    const ready = (await q.limit(BATCH).get()).size;
-    if (ready >= BATCH) continue;
+    const ready = (await q.limit(target).get()).size;
+    if (ready >= target) continue;
     const waiting = new Set((await C.draftJobs.where("nextTryAt", ">", nowIso()).get()).docs.map((d) => d.id));
     const cands = (await C.leads.where("campaignId", "==", c.id).where("status", "==", "ready").where("hasMessage", "==", false).orderBy("createdAt").limit(20).get()).docs;
-    let need = BATCH - ready;
+    let need = Math.min(target - ready, budget);
     for (const l of cands) {
       if (need <= 0) break;
       if (waiting.has(l.id) || (await C.messages.doc(l.id).get()).exists) continue;
       const r = await draftForLead(l.id);
       need--;
+      budget--;
       if (!r.ok && /HTTP 429/.test(r.error || "")) return;
     }
   }

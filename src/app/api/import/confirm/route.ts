@@ -9,7 +9,7 @@ export async function POST(req: Request) {
   const { listId } = await req.json();
   const listRef = C.lists.doc(String(listId));
   const list = await listRef.get();
-  if (!list.exists || list.get("confirmed")) return NextResponse.json({ error: "List not found or already confirmed" }, { status: 400 });
+  if (!list.exists || list.get("confirmed")) return NextResponse.json({ error: "List nahi mili, ya pehle hi confirm ho chuki hai" }, { status: 400 });
   const rows = toRows<ImportRow>(await listRef.collection("rows").where("outcome", "in", ["send", "review"]).get());
 
   let created = 0;

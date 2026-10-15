@@ -7,8 +7,8 @@ export const maxDuration = 300;
 
 export async function POST(req: Request) {
   const { listName, sourceNote, rows } = (await req.json()) as { listName: string; sourceNote: string; rows: InRow[] };
-  if (!rows?.length) return NextResponse.json({ error: "No rows" }, { status: 400 });
-  if (!sourceNote?.trim()) return NextResponse.json({ error: "Say where you found these addresses (shown in the footer)" }, { status: 400 });
+  if (!rows?.length) return NextResponse.json({ error: "List mein koi row nahi hai" }, { status: 400 });
+  if (!sourceNote?.trim()) return NextResponse.json({ error: "Batao ye addresses kahan se mile (ye mail ke footer mein dikhta hai)" }, { status: 400 });
   const out = await processRows(rows);
   const counts = { send: 0, review: 0, skip: 0 } as Record<string, number>;
   for (const r of out) counts[r.outcome]++;

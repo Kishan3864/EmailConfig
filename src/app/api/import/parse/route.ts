@@ -11,7 +11,7 @@ export async function POST(req: Request) {
   const pasted = String(fd.get("text") || "");
   try {
     if (!file || file.size === 0) {
-      if (!pasted.trim()) return NextResponse.json({ error: "No file or text" }, { status: 400 });
+      if (!pasted.trim()) return NextResponse.json({ error: "Koi file ya text nahi mila" }, { status: 400 });
       return NextResponse.json({ kind: "extracted", rows: extractFromText(pasted) });
     }
     const name = file.name.toLowerCase();
@@ -35,6 +35,6 @@ export async function POST(req: Request) {
     }
     return NextResponse.json({ kind: "extracted", rows: extractFromText(buf.toString("utf8")) });
   } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : "parse failed" }, { status: 400 });
+    return NextResponse.json({ error: `File padh nahi paye: ${e instanceof Error ? e.message : "unknown error"}` }, { status: 400 });
   }
 }

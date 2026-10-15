@@ -1,31 +1,61 @@
 "use client";
 import { useState } from "react";
+import { EmptyState, Field } from "@/components/ui";
+import { SubmitButton } from "@/components/ActionForm";
+import { Icon } from "@/components/icons";
 import { createCampaign } from "../actions";
 
-type L = { id: string; name: string; count: number; language: string; timezone: string };
+/** count = free leads (Ready + 'Review chahiye'), review = how many of them still need review */
+type L = { id: string; name: string; count: number; review: number; language: string; timezone: string };
 const LANGS: Record<string, string> = { en: "English", fr: "French", de: "German", es: "Spanish", it: "Italian", nl: "Dutch", pt: "Portuguese" };
 const TZS = ["Europe/Paris", "Europe/Brussels", "Europe/Zurich", "Europe/London", "Europe/Berlin", "Europe/Madrid", "Europe/Rome", "Europe/Amsterdam", "Europe/Lisbon", "America/New_York", "America/Chicago", "America/Los_Angeles", "America/Toronto", "Asia/Kolkata", "Asia/Dubai", "Asia/Singapore", "Australia/Sydney", "Africa/Casablanca"];
 
+// createCampaign redirects to the new campaign, so this stays a plain server-action form (no toast needed on success).
 export function CampaignForm({ lists }: { lists: L[] }) {
   const [sel, setSel] = useState<L | undefined>(lists[0]);
   const [lang, setLang] = useState(lists[0]?.language || "en");
   const [tz, setTz] = useState(lists[0]?.timezone || "Europe/Paris");
-  if (!lists.length) return <div className="card text-sm text-slate-500">No confirmed list with unassigned leads. Import a list first.</div>;
+  // the name follows the chosen list until the user types a name of their own
+  const [name, setName] = useState(lists[0] ? `${lists[0].name} campaign` : "");
+  const [ownName, setOwnName] = useState(false);
+  if (!lists.length) return <EmptyState icon="upload" title="Pehle leads import karo" text="Abhi koi nayi list nahi hai jiske leads campaign ke liye free hon." href="/import" cta="Leads import karo" />;
   return (
-    <form action={createCampaign} className="card grid md:grid-cols-5 gap-3 items-end">
-      <label><span className="label">Name</span><input name="name" className="input" required defaultValue={`${lists[0].name} campaign`} /></label>
-      <label><span className="label">List</span>
-        <select name="listId" className="input" value={sel?.id} onChange={(e) => { const l = lists.find((x) => x.id === e.target.value)!; setSel(l); setLang(l.language); setTz(l.timezone); }}>
-          {lists.map((l) => <option key={l.id} value={l.id}>{l.name} ({l.count})</option>)}
-        </select>
-      </label>
-      <label><span className="label">Language (auto from country)</span>
-        <select name="language" className="input" value={lang} onChange={(e) => setLang(e.target.value)}>{Object.entries(LANGS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
-      </label>
-      <label><span className="label">Timezone</span>
-        <select name="timezone" className="input" value={tz} onChange={(e) => setTz(e.target.value)}>{[...new Set([tz, ...TZS])].map((t) => <option key={t}>{t}</option>)}</select>
-      </label>
-      <button className="btn-primary">Create campaign</button>
+    <form action={createCampaign}>
+      <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_0.85fr_1.15fr]">
+        <Field label="Campaign ka naam" info="Sirf aapke pehchanne ke liye. Ye naam lead ko kabhi nahi dikhta.">
+          <input name="name" className="input" required value={name} onChange={(e) => { setName(e.target.value); setOwnName(true); }} />
+        </Field>
+        <Field label="List" info="Kis list ke leads ko mail jayegi. List ke saare free leads (Ready ya ‘Review chahiye’, jo kisi aur campaign mein nahi hain) is campaign mein jud jaate hain. Bracket mein unki ginti hai. ‘Review chahiye’ wale leads ko Ready leads khatam hone se pehle Contacts mein approve karo, warna campaign khatam ho jayega aur wo reh jayenge.">
+          <select name="listId" className="input" value={sel?.id} onChange={(e) => {
+            const l = lists.find((x) => x.id === e.target.value)!;
+            setSel(l); setLang(l.language); setTz(l.timezone);
+            if (!ownName || !name.trim()) setName(`${l.name} campaign`);
+          }}>
+            {lists.map((l) => <option key={l.id} value={l.id}>{l.name} ({l.count} leads{l.review ? `, ${l.review} review baaki` : ""})</option>)}
+          </select>
+        </Field>
+        <Field label="Bhasha (desh se apne aap)" info="Mails is bhasha mein likhi jayengi. List ke zyada-tar leads jis desh ke hain, uske hisaab se ye apne aap chuni jaati hai. Chaho to badal sakte ho.">
+          <select name="language" className="input" value={lang} onChange={(e) => setLang(e.target.value)}>{Object.entries(LANGS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+        </Field>
+        <Field label="Timezone (sending window isi mein chalegi)" info="Sending window (jaise 09:30-17:30) aur daily limit isi timezone ke hisaab se chalti hai, taaki mail lead ke kaam ke samay pe pahunche. Ye bhi desh se apne aap chuna jaata hai.">
+          <select name="timezone" className="input" value={tz} onChange={(e) => setTz(e.target.value)}>{[...new Set([tz, ...TZS])].map((t) => <option key={t}>{t}</option>)}</select>
+        </Field>
+      </div>
+      <div className="mt-4 flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0 space-y-1.5">
+          <p className="flex items-start gap-1.5 text-xs text-slate-500">
+            <Icon name="info" size={13} className="mt-px shrink-0 text-slate-400" />
+            Banane se koi mail nahi jaati. Agla step: 5 sample drafts banao aur padho.
+          </p>
+          {sel && sel.review > 0 && (
+            <p className="flex items-start gap-1.5 text-xs text-amber-700">
+              <Icon name="alert" size={13} className="mt-px shrink-0" />
+              Is list ke {sel.review} lead ‘Review chahiye’ mein hain. Unhe Ready leads khatam hone se pehle Contacts mein approve karo, warna campaign khatam ho jayega aur wo reh jayenge.
+            </p>
+          )}
+        </div>
+        <SubmitButton icon="plus" pendingText="Ban raha hai…" className="btn-primary w-full sm:w-auto">Campaign banao</SubmitButton>
+      </div>
     </form>
   );
 }

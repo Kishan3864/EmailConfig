@@ -12,4 +12,5 @@ export async function middleware(req: NextRequest) {
   return NextResponse.redirect(`${proto}://${host}/login`);
 }
 
-export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"] };
+// the home-screen manifest and icons are public, so a phone can fetch them before logging in
+export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon|manifest.webmanifest).*)"] };

@@ -47,7 +47,7 @@ export async function importSentFolder() {
   try {
     const boxes = await c.list();
     const sent = boxes.find((b) => b.specialUse === "\\Sent") || boxes.find((b) => /^(inbox\.)?sent/i.test(b.path));
-    if (!sent) throw new Error("Mailbox mein Sent folder nahi mila");
+    if (!sent) throw new Error("Sent folder not found");
     const lock = await c.getMailboxLock(sent.path);
     try {
       for await (const m of c.fetch("1:*", { envelope: true })) {
@@ -60,5 +60,5 @@ export async function importSentFolder() {
   if (s.alertEmail) found.delete(s.alertEmail.toLowerCase());
   const r = await addToLedger([...found], "sent-folder", "found in mailbox Sent folder");
   await log("info", "ledger", `Sent folder import: ${found.size} recipients, ${r.added} new in ledger`);
-  return `Sent folder mein ${found.size} address mile\n${r.added} ledger mein add hue, ${r.alreadyThere} pehle se the.`;
+  return `Sent folder: ${found.size} recipients found, ${r.added} added to the contacted ledger (${r.alreadyThere} were already there)`;
 }

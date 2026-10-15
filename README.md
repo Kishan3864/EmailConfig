@@ -2,7 +2,7 @@
 
 A single-user app that emails each lead **once ever**, slowly and automatically, from your Hostinger mailbox. Each message is personalised by an AI from facts the app checks on the lead's real homepage. When the app is unsure about anything, it does not send.
 
-- **Web UI**: Next.js 15, run with pm2 behind nginx on your own server. The interface is in Hinglish: every menu sits in a sidebar that can be collapsed, every section has an (i) with help, each page says what to do next, and results and problems show up as toasts. On a phone it works like an app (bottom tab bar); use the browser's "Add to Home Screen" to open it full screen.
+- **Web UI**: Next.js 15, run with pm2 behind nginx on your own server. The interface is in Hinglish or English (switch at the top of every page, remembered per browser): every menu sits in a sidebar that can be collapsed, every section has an (i) with help, each page says what to do next, and results and problems show up as toasts. On a phone it works like an app (bottom tab bar); use the browser's "Add to Home Screen" to open it full screen.
 - **Worker**: a second pm2 process. Every minute it syncs the inbox (every 10 minutes), prepares AI drafts and sends at most one mail.
 - **Database**: Firestore (free Spark plan), in the Firebase project's existing database. Every outreach collection is prefixed `outreach_`, so it never mixes with the website's own collections, and the website's default-deny rule keeps it server-only.
 - **Mail**: Nodemailer (SMTP) and imapflow (IMAP) against Hostinger

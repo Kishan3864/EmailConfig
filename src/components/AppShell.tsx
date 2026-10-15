@@ -4,8 +4,9 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import { Icon } from "./icons";
 import { Info } from "./Info";
+import { LangSwitch, useT } from "./lang";
 import { Logo } from "./ui";
-import { ALL_NAV, MOBILE_TABS, NAV, findNav, isActive, type NavItem } from "./nav";
+import { ALL_NAV, MOBILE_TABS, NAV, findNav, isActive, pickText, type NavItem, type Text } from "./nav";
 
 /** hard: use a full page load (the shell itself is stale, e.g. after a database error) */
 export type ShellBanner = { title: string; text?: string; href: string; hard?: boolean } | null;
@@ -21,6 +22,8 @@ const REFRESH_EVERY = 5 * 60_000;
 export function AppShell({ children, collapsed: initial, waiting, dryRun, banner }: { children: ReactNode; collapsed: boolean; waiting: number; dryRun: boolean | null; banner: ShellBanner }) {
   const pathname = usePathname() || "/";
   const router = useRouter();
+  const { lang, t } = useT();
+  const L = (x: Text) => pickText(lang, x);
   const [collapsed, setCollapsed] = useState(initial);
   const [sheet, setSheet] = useState(false);
 
@@ -44,8 +47,8 @@ export function AppShell({ children, collapsed: initial, waiting, dryRun, banner
     };
     document.addEventListener("visibilitychange", refresh);
     window.addEventListener("focus", refresh);
-    const t = setInterval(refresh, REFRESH_EVERY);
-    return () => { document.removeEventListener("visibilitychange", refresh); window.removeEventListener("focus", refresh); clearInterval(t); };
+    const timer = setInterval(refresh, REFRESH_EVERY);
+    return () => { document.removeEventListener("visibilitychange", refresh); window.removeEventListener("focus", refresh); clearInterval(timer); };
   }, [router]);
 
   const toggle = () => {
@@ -58,10 +61,10 @@ export function AppShell({ children, collapsed: initial, waiting, dryRun, banner
   const detail = !!current && pathname !== current.href;
   const count = (href: string) => (href === "/review" ? waiting : 0);
   const mode = dryRun === null
-    ? { short: "MODE ?", title: "Mode pata nahi", sub: "Database se mode nahi padh paye", icon: "alert" as const, box: "border-slate-200 bg-slate-50 hover:bg-slate-100", chip: "bg-slate-200 text-slate-600", text: "text-slate-700", pill: "bg-slate-100 text-slate-600 ring-slate-500/20", dot: "bg-slate-400" }
+    ? { short: "MODE ?", title: t("Mode pata nahi", "Mode unknown"), sub: t("Database se mode nahi padh paye", "Could not read the mode from the database"), icon: "alert" as const, box: "border-slate-200 bg-slate-50 hover:bg-slate-100", chip: "bg-slate-200 text-slate-600", text: "text-slate-700", pill: "bg-slate-100 text-slate-600 ring-slate-500/20", dot: "bg-slate-400" }
     : dryRun
-      ? { short: "DRY-RUN", title: "DRY-RUN mode", sub: "Mails sirf aapke test address pe", icon: "flask" as const, box: "border-amber-200 bg-amber-50/70 hover:bg-amber-50", chip: "bg-amber-100 text-amber-700", text: "text-amber-800", pill: "bg-amber-50 text-amber-700 ring-amber-600/20", dot: "bg-amber-500" }
-      : { short: "LIVE", title: "LIVE mode", sub: "Mails asli leads ko jaa rahi hain", icon: "zap" as const, box: "border-emerald-200 bg-emerald-50/70 hover:bg-emerald-50", chip: "bg-emerald-100 text-emerald-700", text: "text-emerald-800", pill: "bg-emerald-50 text-emerald-700 ring-emerald-600/20", dot: "animate-pulse bg-emerald-500" };
+      ? { short: "DRY-RUN", title: "DRY-RUN mode", sub: t("Mails sirf aapke test address pe", "Mails only go to your test address"), icon: "flask" as const, box: "border-amber-200 bg-amber-50/70 hover:bg-amber-50", chip: "bg-amber-100 text-amber-700", text: "text-amber-800", pill: "bg-amber-50 text-amber-700 ring-amber-600/20", dot: "bg-amber-500" }
+      : { short: "LIVE", title: "LIVE mode", sub: t("Mails asli leads ko jaa rahi hain", "Mails go to real leads"), icon: "zap" as const, box: "border-emerald-200 bg-emerald-50/70 hover:bg-emerald-50", chip: "bg-emerald-100 text-emerald-700", text: "text-emerald-800", pill: "bg-emerald-50 text-emerald-700 ring-emerald-600/20", dot: "animate-pulse bg-emerald-500" };
 
   return (
     <div id="top" className="min-h-dvh">
@@ -72,19 +75,19 @@ export function AppShell({ children, collapsed: initial, waiting, dryRun, banner
           {!collapsed && (
             <span className="min-w-0 leading-tight">
               <span className="block text-[14px] font-semibold tracking-tight text-slate-900">Outreach</span>
-              <span className="block text-2xs text-slate-400">Dheere aur safe cold mail</span>
+              <span className="block text-2xs text-slate-400">{t("Dheere aur safe cold mail", "Slow and safe cold email")}</span>
             </span>
           )}
         </Link>
 
         <nav className="flex-1 space-y-3 overflow-y-auto overflow-x-hidden px-3 py-3 [scrollbar-width:thin] [@media(max-height:720px)]:space-y-2" aria-label="Menu">
           {NAV.map((g, gi) => (
-            <div key={g.title}>
+            <div key={g.title.en}>
               {/* short screens (e.g. 1366x768 laptops) drop the group titles so every menu fits */}
               {collapsed
                 ? gi > 0 && <div className="mx-auto mb-2 h-px w-6 bg-slate-200" />
                 : <>
-                    <div className="mb-1 px-2.5 text-2xs font-bold uppercase tracking-wider text-slate-400 [@media(max-height:720px)]:hidden">{g.title}</div>
+                    <div className="mb-1 px-2.5 text-2xs font-bold uppercase tracking-wider text-slate-400 [@media(max-height:720px)]:hidden">{L(g.title)}</div>
                     {gi > 0 && <div className="mx-2.5 mb-2 hidden h-px bg-slate-100 [@media(max-height:720px)]:block" />}
                   </>}
               <div className="space-y-0.5">
@@ -121,7 +124,7 @@ export function AppShell({ children, collapsed: initial, waiting, dryRun, banner
             <div className="flex min-w-0 flex-1 items-center gap-2 lg:hidden">
               {detail && current ? (
                 <Link href={current.href} className="-ml-1.5 inline-flex items-center rounded-lg py-1 pr-2 text-[14px] font-medium text-indigo-600 active:bg-slate-100">
-                  <Icon name="chevron-left" size={22} strokeWidth={2.2} />{current.short}
+                  <Icon name="chevron-left" size={22} strokeWidth={2.2} />{L(current.short)}
                 </Link>
               ) : (
                 <Link href="/" className="flex min-w-0 items-center gap-2">
@@ -133,7 +136,7 @@ export function AppShell({ children, collapsed: initial, waiting, dryRun, banner
 
             {/* desktop: sidebar toggle + breadcrumb */}
             <div className="hidden min-w-0 flex-1 items-center gap-2 lg:flex">
-              <button type="button" onClick={toggle} className="btn-ghost btn-icon -ml-2" aria-label={collapsed ? "Sidebar kholo" : "Sidebar chhota karo"} title={collapsed ? "Sidebar kholo" : "Sidebar chhota karo"}>
+              <button type="button" onClick={toggle} className="btn-ghost btn-icon -ml-2" aria-label={collapsed ? t("Sidebar kholo", "Open sidebar") : t("Sidebar chhota karo", "Collapse sidebar")} title={collapsed ? t("Sidebar kholo", "Open sidebar") : t("Sidebar chhota karo", "Collapse sidebar")}>
                 <Icon name={collapsed ? "panel-open" : "panel-close"} size={17} />
               </button>
               <span className="h-5 w-px bg-slate-200" />
@@ -141,20 +144,21 @@ export function AppShell({ children, collapsed: initial, waiting, dryRun, banner
                 {current && <Icon name={current.icon} size={15} className="text-slate-400" />}
                 {detail && current ? (
                   <>
-                    <Link href={current.href} className="font-medium text-slate-500 hover:text-slate-900">{current.label}</Link>
+                    <Link href={current.href} className="font-medium text-slate-500 hover:text-slate-900">{L(current.label)}</Link>
                     <Icon name="chevron-right" size={13} className="text-slate-300" />
                     <span className="truncate font-medium text-slate-900">Detail</span>
                   </>
-                ) : <span className="truncate font-medium text-slate-900">{current?.label || "Outreach"}</span>}
+                ) : <span className="truncate font-medium text-slate-900">{current ? L(current.label) : "Outreach"}</span>}
               </div>
             </div>
 
             <div className="flex shrink-0 items-center gap-2">
               {waiting > 0 && !pathname.startsWith("/review") && (
                 <Link href="/review" className="btn btn-sm hidden lg:inline-flex">
-                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />{waiting === 1 ? "1 mail approve karni hai" : `${waiting} mails approve karni hain`}
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />{waiting === 1 ? t("1 mail approve karni hai", "1 mail to approve") : t(`${waiting} mails approve karni hain`, `${waiting} mails to approve`)}
                 </Link>
               )}
+              <LangSwitch />
               <Link href="/#mode" className={`inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-2xs font-bold ring-1 ring-inset ${collapsed ? "" : "lg:hidden"} ${mode.pill}`}>
                 <span className={`h-1.5 w-1.5 rounded-full ${mode.dot}`} />{mode.short}
               </Link>
@@ -166,7 +170,7 @@ export function AppShell({ children, collapsed: initial, waiting, dryRun, banner
               <>
                 <Icon name="alert" size={14} />
                 <span className="min-w-0 flex-1 truncate"><b>{banner.title}</b>{banner.text ? ` · ${banner.text}` : ""}</span>
-                <span className="hidden shrink-0 items-center gap-1 sm:inline-flex">{banner.hard ? "Dobara load karo" : "Dashboard pe dekho"} <Icon name="arrow-right" size={12} /></span>
+                <span className="hidden shrink-0 items-center gap-1 sm:inline-flex">{banner.hard ? t("Dobara load karo", "Reload") : t("Dashboard pe dekho", "See dashboard")} <Icon name="arrow-right" size={12} /></span>
               </>
             );
             const cls = "flex items-center gap-2 bg-red-600 px-4 py-2 text-xs font-medium text-white lg:px-6";
@@ -183,31 +187,31 @@ export function AppShell({ children, collapsed: initial, waiting, dryRun, banner
         <div className="mx-auto grid h-[58px] max-w-lg grid-cols-5">
           {MOBILE_TABS.map((href) => {
             const it = ALL_NAV.find((x) => x.href === href)!;
-            return <TabLink key={href} href={href} icon={<Icon name={it.icon} size={20} strokeWidth={isActive(href, pathname) ? 2.1 : 1.8} />} label={it.short} on={isActive(href, pathname)} count={count(href)} />;
+            return <TabLink key={href} href={href} icon={<Icon name={it.icon} size={20} strokeWidth={isActive(href, pathname) ? 2.1 : 1.8} />} label={L(it.short)} on={isActive(href, pathname)} count={count(href)} />;
           })}
           <button type="button" onClick={() => setSheet(true)} className={`flex flex-col items-center justify-center gap-1 text-[10.5px] font-medium transition active:scale-95 ${!MOBILE_TABS.some((h) => isActive(h, pathname)) ? "text-indigo-600" : "text-slate-500"}`}>
             <span className={`grid h-7 w-12 place-items-center rounded-full ${!MOBILE_TABS.some((h) => isActive(h, pathname)) ? "bg-indigo-50" : ""}`}><Icon name="grid" size={20} /></span>
-            Aur
+            {t("Aur", "More")}
           </button>
         </div>
       </nav>
 
       {/* ---------- phone "Aur" sheet with every menu ---------- */}
       {sheet && (
-        <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label="Saare menu">
-          <button type="button" aria-label="Band karo" onClick={() => setSheet(false)} className="absolute inset-0 animate-fade-in bg-slate-900/40" />
+        <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label={t("Saare menu", "All menus")}>
+          <button type="button" aria-label={t("Band karo", "Close")} onClick={() => setSheet(false)} className="absolute inset-0 animate-fade-in bg-slate-900/40" />
           <div className="absolute inset-x-0 bottom-0 max-h-[88dvh] animate-sheet-in overflow-y-auto rounded-t-2xl bg-canvas pb-safe shadow-pop">
             <div className="sticky top-0 z-10 bg-canvas/95 px-4 pb-2 pt-2.5 backdrop-blur">
               <div className="mx-auto mb-2.5 h-1 w-10 rounded-full bg-slate-300" />
               <div className="flex items-center justify-between">
-                <div className="text-[15px] font-semibold text-slate-900">Saare menu</div>
-                <button type="button" onClick={() => setSheet(false)} className="btn-ghost btn-icon btn-sm" aria-label="Band karo"><Icon name="x" size={16} /></button>
+                <div className="text-[15px] font-semibold text-slate-900">{t("Saare menu", "All menus")}</div>
+                <button type="button" onClick={() => setSheet(false)} className="btn-ghost btn-icon btn-sm" aria-label={t("Band karo", "Close")}><Icon name="x" size={16} /></button>
               </div>
             </div>
             <div className="space-y-4 px-3 pb-5">
               {NAV.map((g) => (
-                <div key={g.title}>
-                  <div className="px-2 pb-1.5 text-2xs font-bold uppercase tracking-wider text-slate-400">{g.title}</div>
+                <div key={g.title.en}>
+                  <div className="px-2 pb-1.5 text-2xs font-bold uppercase tracking-wider text-slate-400">{L(g.title)}</div>
                   <div className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200/80 bg-white">
                     {g.items.map((it) => {
                       const on = current?.href === it.href;
@@ -217,10 +221,10 @@ export function AppShell({ children, collapsed: initial, waiting, dryRun, banner
                           <span className={`mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg ${on ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-500"}`}><Icon name={it.icon} size={16} /></span>
                           <span className="min-w-0 flex-1">
                             <span className="flex items-center gap-1.5 text-[13.5px] font-semibold text-slate-900">
-                              {it.label}
+                              {L(it.label)}
                               {n > 0 && <span className="rounded-full bg-amber-500 px-1.5 text-2xs font-bold leading-4 text-white">{n}</span>}
                             </span>
-                            <span className="mt-0.5 block text-xs leading-snug text-slate-500">{it.info}</span>
+                            <span className="mt-0.5 block text-xs leading-snug text-slate-500">{L(it.info)}</span>
                           </span>
                           <Icon name="chevron-right" size={16} className="mt-2 text-slate-300" />
                         </Link>
@@ -243,19 +247,21 @@ export function AppShell({ children, collapsed: initial, waiting, dryRun, banner
 }
 
 function SideLink({ it, on, collapsed, count }: { it: NavItem; on: boolean; collapsed: boolean; count: number }) {
+  const { lang } = useT();
+  const label = pickText(lang, it.label);
   return (
-    <Link href={it.href} title={collapsed ? it.label : undefined} aria-current={on ? "page" : undefined}
+    <Link href={it.href} title={collapsed ? label : undefined} aria-current={on ? "page" : undefined}
       className={`group relative flex h-8 items-center gap-2.5 rounded-lg text-sm font-medium transition ${collapsed ? "justify-center" : "px-2.5"} ${on ? "bg-indigo-50 text-indigo-700" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"}`}>
       {on && <span className="absolute -left-3 bottom-1.5 top-1.5 w-[3px] rounded-r-full bg-indigo-600" />}
       <Icon name={it.icon} size={17} className={on ? "text-indigo-600" : "text-slate-400 transition group-hover:text-slate-600"} />
-      {!collapsed && <span className="min-w-0 flex-1 truncate">{it.label}</span>}
+      {!collapsed && <span className="min-w-0 flex-1 truncate">{label}</span>}
       {count > 0 && (collapsed
         ? <span className="absolute right-2 top-1.5 h-2 w-2 rounded-full bg-amber-500 ring-2 ring-white" />
         : <span className="rounded-full bg-amber-500 px-1.5 text-2xs font-bold leading-4 text-white">{count > 99 ? "99+" : count}</span>)}
       {/* the (i) shows on mouse hover only; touch screens and keyboards get the plain link (the phone menu shows the text) */}
       {!collapsed && !count && (
         <span className="hidden opacity-0 transition group-hover:opacity-100 [@media(hover:hover)]:inline-flex">
-          <Info text={it.info} title={it.label} size={13} focusable={false} />
+          <Info text={pickText(lang, it.info)} title={label} size={13} focusable={false} />
         </span>
       )}
     </Link>

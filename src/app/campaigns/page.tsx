@@ -2,15 +2,20 @@ import Link from "next/link";
 import type { ComponentProps } from "react";
 import { C, count, rows, type Campaign, type LeadList } from "@/lib/fsdb";
 import { getSettings } from "@/lib/settings";
+import { getT } from "@/lib/i18n-server";
 import { countryInfo } from "@/lib/lang";
 import { estimateFinish } from "@/lib/schedule";
 import { fmtDate } from "@/lib/time";
 import { Badge, EmptyState, NextStep, PageHeader, Progress, Section } from "@/components/ui";
 import { CampaignForm } from "./CampaignForm";
 
-export const metadata = { title: "Campaigns" };
+export async function generateMetadata() {
+  const { t } = await getT();
+  return { title: t("Campaigns", "Campaigns") };
+}
 
 export default async function Campaigns() {
+  const { t } = await getT();
   const s = await getSettings();
   const campaigns = rows<Campaign>(await C.campaigns.get()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const lists = rows<LeadList>(await C.lists.where("confirmed", "==", true).get());
@@ -45,51 +50,114 @@ export default async function Campaigns() {
 
   const runningNext: ComponentProps<typeof NextStep> = s.dryRun
     ? auto
-      ? { text: "Campaign DRY-RUN mein chal raha hai: drafts apne aap approve hoke sirf aapke test address pe jaati hain, leads ko nahi. Test mails Sent page pe dekho; sab theek ho to Dashboard se LIVE karo.", href: "/#mode", cta: "Mode dekho" }
-      : { text: "Campaign DRY-RUN mein chal raha hai: approve ki hui mails sirf aapke test address pe jaati hain, leads ko nahi. Nayi drafts Approve page pe approve karo; sab theek ho to Dashboard se LIVE karo.", href: "/review", cta: "Approve page kholo" }
+      ? {
+        text: t(
+          "Campaign DRY-RUN mein chal raha hai: drafts apne aap approve hoke sirf aapke test address pe jaati hain, leads ko nahi. Test mails Sent page pe dekho; sab theek ho to Dashboard se LIVE karo.",
+          "The campaign is running in DRY-RUN: drafts are approved automatically and go only to your test address, not to the leads. Check the test mails on the Sent page; if all looks good, switch to LIVE on the Dashboard.",
+        ),
+        href: "/#mode", cta: t("Mode dekho", "See mode"),
+      }
+      : {
+        text: t(
+          "Campaign DRY-RUN mein chal raha hai: approve ki hui mails sirf aapke test address pe jaati hain, leads ko nahi. Nayi drafts Approve page pe approve karo; sab theek ho to Dashboard se LIVE karo.",
+          "The campaign is running in DRY-RUN: approved mails go only to your test address, not to the leads. Approve new drafts on the Approve page; if all looks good, switch to LIVE on the Dashboard.",
+        ),
+        href: "/review", cta: t("Approve page kholo", "Open Approve page"),
+      }
     : auto
-      ? { text: "Campaign chal raha hai. Auto-approve on hai: nayi drafts aapke padhe bina apne aap approve hoke leads ko jaati hain. Har mail pehle padhni ho to Settings mein ‘Har mail approve karke hi bhejo’ on karo.", href: "/settings", cta: "Settings dekho" }
-      : { text: "Campaign chal raha hai. Nayi drafts Approve page pe aati hain: unhe padh ke approve karo, tabhi mail jayegi.", href: "/review", cta: "Approve page kholo" };
+      ? {
+        text: t(
+          "Campaign chal raha hai. Auto-approve on hai: nayi drafts aapke padhe bina apne aap approve hoke leads ko jaati hain. Har mail pehle padhni ho to Settings mein ‘Har mail approve karke hi bhejo’ on karo.",
+          "The campaign is running. Auto-approve is on: new drafts are approved automatically and go to the leads without you reading them. To read every mail first, turn on ‘Approve every mail before sending’ in Settings.",
+        ),
+        href: "/settings", cta: t("Settings dekho", "Open Settings"),
+      }
+      : {
+        text: t(
+          "Campaign chal raha hai. Nayi drafts Approve page pe aati hain: unhe padh ke approve karo, tabhi mail jayegi.",
+          "The campaign is running. New drafts show up on the Approve page: read and approve them; only then does a mail go out.",
+        ),
+        href: "/review", cta: t("Approve page kholo", "Open Approve page"),
+      };
 
   // what to do next, depending on where the campaigns stand
   const nextIsImport = !draft && !running && !paused && !available.length;
+  const name = (n: string) => <b className="font-semibold text-slate-900">{n}</b>;
   const next: ComponentProps<typeof NextStep> = draft
     ? draft.remaining
-      ? { text: <><b className="font-semibold text-slate-900">{draft.c.name}</b> ke 5 sample drafts banao, unhe padho aur start karo.</>, href: `/campaigns/${draft.c.id}`, cta: "Campaign kholo" }
-      : { text: <><b className="font-semibold text-slate-900">{draft.c.name}</b> mein abhi koi Ready lead nahi hai, isliye samples nahi ban sakte. Campaign kholo: wahan likha hai aage kya karna hai.</>, href: `/campaigns/${draft.c.id}`, cta: "Campaign kholo", tone: "amber" }
+      ? {
+        text: t(
+          <>{name(draft.c.name)} ke 5 sample drafts banao, unhe padho aur start karo.</>,
+          <>Make 5 sample drafts for {name(draft.c.name)}, read them and start the campaign.</>,
+        ),
+        href: `/campaigns/${draft.c.id}`, cta: t("Campaign kholo", "Open campaign"),
+      }
+      : {
+        text: t(
+          <>{name(draft.c.name)} mein abhi koi Ready lead nahi hai, isliye samples nahi ban sakte. Campaign kholo: wahan likha hai aage kya karna hai.</>,
+          <>{name(draft.c.name)} has no Ready lead right now, so no samples can be made. Open the campaign: it says what to do next.</>,
+        ),
+        href: `/campaigns/${draft.c.id}`, cta: t("Campaign kholo", "Open campaign"), tone: "amber",
+      }
     : running
       ? runningNext
       : paused
-        ? { text: <><b className="font-semibold text-slate-900">{paused.name}</b> ruka hua hai. Taiyaar ho to campaign kholo aur ‘Resume karo’ dabao.</>, href: `/campaigns/${paused.id}`, cta: "Campaign kholo", tone: "amber" }
+        ? {
+          text: t(
+            <>{name(paused.name)} ruka hua hai. Taiyaar ho to campaign kholo aur ‘Resume karo’ dabao.</>,
+            <>{name(paused.name)} is paused. When you are ready, open the campaign and press ‘Resume’.</>,
+          ),
+          href: `/campaigns/${paused.id}`, cta: t("Campaign kholo", "Open campaign"), tone: "amber",
+        }
         : nextIsImport
-          ? { text: campaigns.length ? "Naya campaign banane ke liye nayi leads chahiye. Pehle leads ki list import karo." : "Shuru karne ke liye pehle leads ki list import karo. Uske baad yahan campaign banega.", href: "/import", cta: "Leads import karo" }
-          : { text: "Neeche form mein list chuno aur ‘Campaign banao’ dabao. Uske baad 5 sample drafts banenge." };
+          ? {
+            text: campaigns.length
+              ? t("Naya campaign banane ke liye nayi leads chahiye. Pehle leads ki list import karo.", "A new campaign needs new leads. First import a list of leads.")
+              : t("Shuru karne ke liye pehle leads ki list import karo. Uske baad yahan campaign banega.", "To get started, first import a list of leads. After that you can create a campaign here."),
+            href: "/import", cta: t("Leads import karo", "Import leads"),
+          }
+          : { text: t("Neeche form mein list chuno aur ‘Campaign banao’ dabao. Uske baad 5 sample drafts banenge.", "Choose a list in the form below and press ‘Create campaign’. After that, 5 sample drafts will be made.") };
 
   const form = (
     <Section
       id="naya-campaign"
-      title="Naya campaign banao"
+      title={t("Naya campaign banao", "Create a new campaign")}
       icon="plus"
-      info="List chuno, bhasha aur timezone check karo, phir ‘Campaign banao’ dabao. List ke saare free leads is campaign mein jud jaate hain. Banane se koi mail nahi jaati: pehle 5 samples banenge, jinhe aap padhoge."
-      sub="Sirf wahi lists dikhti hain jinke leads abhi kisi campaign mein nahi hain."
+      info={t(
+        "List chuno, bhasha aur timezone check karo, phir ‘Campaign banao’ dabao. List ke saare free leads is campaign mein jud jaate hain. Banane se koi mail nahi jaati: pehle 5 samples banenge, jinhe aap padhoge.",
+        "Choose a list, check the language and timezone, then press ‘Create campaign’. All free leads of the list are added to this campaign. Creating it sends no mail: first 5 samples are made for you to read.",
+      )}
+      sub={t("Sirf wahi lists dikhti hain jinke leads abhi kisi campaign mein nahi hain.", "Only lists whose leads are not in a campaign yet are shown.")}
     >
       <CampaignForm lists={available} />
     </Section>
   );
 
+  const COL = {
+    name: t("Naam", "Name"),
+    list: t("List", "List"),
+    lang: t("Bhasha / Timezone", "Language / Timezone"),
+    sent: t("Bheji", "Sent"),
+    left: t("Baaki", "Remaining"),
+    finish: t("Kab tak khatam", "Est. finish"),
+  };
+
   const table = (
     <Section
       flush
-      title="Saare campaigns"
+      title={t("Saare campaigns", "All campaigns")}
       icon="megaphone"
-      info="Har campaign ka haal: kitni mails gayi (Bheji), kitni baaki hain (Baaki) aur andaza kab tak sab chali jayengi. Date sirf chalte campaign ki dikhti hai. Detail aur controls ke liye campaign ke naam pe click karo."
-      sub={newest.length ? `${newest.length} campaign · naye sabse upar` : undefined}
+      info={t(
+        "Har campaign ka haal: kitni mails gayi (Bheji), kitni baaki hain (Baaki) aur andaza kab tak sab chali jayengi. Date sirf chalte campaign ki dikhti hai. Detail aur controls ke liye campaign ke naam pe click karo.",
+        "Where each campaign stands: how many mails went out (Sent), how many are left (Remaining) and an estimate of when all will have gone. The date shows only for a running campaign. Click a campaign's name for details and controls.",
+      )}
+      sub={newest.length ? t(`${newest.length} campaign · naye sabse upar`, `${newest.length} ${newest.length === 1 ? "campaign" : "campaigns"} · newest first`) : undefined}
     >
       {newest.length ? (
         <div className="overflow-x-auto">
           <table className="tbl tbl-stack">
             <thead>
-              <tr><th>Naam</th><th>Status</th><th>List</th><th>Bhasha / Timezone</th><th className="md:!text-right">Bheji</th><th className="md:!text-right">Baaki</th><th>Kab tak khatam</th></tr>
+              <tr><th>{COL.name}</th><th>Status</th><th>{COL.list}</th><th>{COL.lang}</th><th className="md:!text-right">{COL.sent}</th><th className="md:!text-right">{COL.left}</th><th>{COL.finish}</th></tr>
             </thead>
             <tbody>
               {newest.map(({ c, remaining, sent, finish }) => {
@@ -100,18 +168,18 @@ export default async function Campaigns() {
                     <td>
                       <div className="min-w-0">
                         <Link href={`/campaigns/${c.id}`} className="link break-words">{c.name}</Link>
-                        <div className="mt-0.5 text-xs text-slate-400">Banaya: {fmtDate(c.createdAt)}</div>
+                        <div className="mt-0.5 text-xs text-slate-400">{t("Banaya", "Created")}: {fmtDate(c.createdAt)}</div>
                       </div>
                     </td>
                     <td data-label="Status"><Badge v={c.status} /></td>
-                    <td data-label="List"><span className="break-words">{listNames.get(c.listId) || "—"}</span></td>
-                    <td data-label="Bhasha / Timezone"><span className="whitespace-nowrap">{c.language.toUpperCase()} · {c.timezone}</span></td>
-                    <td data-label="Bheji" className="tabular-nums md:text-right">{sent}</td>
-                    <td data-label="Baaki" className="tabular-nums md:text-right">{remaining}</td>
-                    <td data-label="Kab tak khatam">
+                    <td data-label={COL.list}><span className="break-words">{listNames.get(c.listId) || "—"}</span></td>
+                    <td data-label={COL.lang}><span className="whitespace-nowrap">{c.language.toUpperCase()} · {c.timezone}</span></td>
+                    <td data-label={COL.sent} className="tabular-nums md:text-right">{sent}</td>
+                    <td data-label={COL.left} className="tabular-nums md:text-right">{remaining}</td>
+                    <td data-label={COL.finish}>
                       <div className="min-w-0">
-                        <div className="whitespace-nowrap">{c.status === "done" ? "Poora ho gaya" : c.status === "running" ? fmtDate(finish) : c.status === "paused" ? "Ruka hua" : "Start ke baad"}</div>
-                        <div className="mt-1.5 flex items-center justify-end gap-2 md:justify-start" title={`${sent} bheji, ${remaining} baaki`}>
+                        <div className="whitespace-nowrap">{c.status === "done" ? t("Poora ho gaya", "Finished") : c.status === "running" ? fmtDate(finish) : c.status === "paused" ? t("Ruka hua", "Paused") : t("Start ke baad", "Once started")}</div>
+                        <div className="mt-1.5 flex items-center justify-end gap-2 md:justify-start" title={t(`${sent} bheji, ${remaining} baaki`, `${sent} sent, ${remaining} remaining`)}>
                           <div className="w-20"><Progress value={pct} tone={c.status === "done" ? "emerald" : "indigo"} /></div>
                           <span className="text-2xs tabular-nums text-slate-400">{Math.round(pct * 100)}%</span>
                         </div>
@@ -124,7 +192,10 @@ export default async function Campaigns() {
           </table>
         </div>
       ) : (
-        <EmptyState icon="megaphone" title="Abhi koi campaign nahi" text={available.length ? "Upar wale form se pehla campaign banao." : "Leads import hone ke baad yahan pehla campaign banega."} />
+        <EmptyState icon="megaphone" title={t("Abhi koi campaign nahi", "No campaigns yet")}
+          text={available.length
+            ? t("Upar wale form se pehla campaign banao.", "Create your first campaign with the form above.")
+            : t("Leads import hone ke baad yahan pehla campaign banega.", "Once leads are imported, your first campaign can be created here.")} />
       )}
     </Section>
   );
@@ -134,11 +205,20 @@ export default async function Campaigns() {
       <PageHeader
         title="Campaigns"
         info={auto
-          ? "Campaign = ek lead list + bhasha + timezone. Flow: campaign banao → 5 sample drafts banao → unhe padh ke approve karke start karo → uske baad nayi drafts apne aap approve hoti hain (Settings mein auto-approve on hai) → worker sending window mein dheere-dheere bhejta hai."
-          : "Campaign = ek lead list + bhasha + timezone. Flow: campaign banao → 5 sample drafts banao → unhe padh ke approve karke start karo → baaki har mail Approve page pe approve karo → worker sending window mein dheere-dheere bhejta hai."}
+          ? t(
+            "Campaign = ek lead list + bhasha + timezone. Flow: campaign banao → 5 sample drafts banao → unhe padh ke approve karke start karo → uske baad nayi drafts apne aap approve hoti hain (Settings mein auto-approve on hai) → worker sending window mein dheere-dheere bhejta hai.",
+            "Campaign = one lead list + language + timezone. Flow: create a campaign → make 5 sample drafts → read them, approve and start → after that, new drafts are approved automatically (auto-approve is on in Settings) → the worker sends slowly within the sending window.",
+          )
+          : t(
+            "Campaign = ek lead list + bhasha + timezone. Flow: campaign banao → 5 sample drafts banao → unhe padh ke approve karke start karo → baaki har mail Approve page pe approve karo → worker sending window mein dheere-dheere bhejta hai.",
+            "Campaign = one lead list + language + timezone. Flow: create a campaign → make 5 sample drafts → read them, approve and start → approve every other mail on the Approve page → the worker sends slowly within the sending window.",
+          )}
         sub={auto
-          ? "Lead list se campaign banao. Pehle 5 samples aap approve karte ho; uske baad auto-approve on hai, mails apne aap jaati hain (Settings mein badal sakte ho)."
-          : "Lead list se campaign banao. Aapke approve kiye bina koi mail nahi jaati."}
+          ? t(
+            "Lead list se campaign banao. Pehle 5 samples aap approve karte ho; uske baad auto-approve on hai, mails apne aap jaati hain (Settings mein badal sakte ho).",
+            "Create a campaign from a lead list. You approve the first 5 samples; after that, auto-approve is on and mails go out automatically (you can change this in Settings).",
+          )
+          : t("Lead list se campaign banao. Aapke approve kiye bina koi mail nahi jaati.", "Create a campaign from a lead list. No mail goes out without your approval.")}
       />
       <NextStep {...next} />
       {/* a free list → the form comes first; otherwise the campaign list is what matters (and with nothing to import from, the NextStep above already points to Import) */}

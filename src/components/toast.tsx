@@ -1,7 +1,9 @@
 "use client";
 import Link from "next/link";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { makeT, type T } from "@/lib/i18n";
 import { Icon, type IconName } from "./icons";
+import { useT } from "./lang";
 
 export type ToastKind = "success" | "error" | "warning" | "info";
 /** reload: the CTA reloads the whole page (for problems a client-side navigation cannot fix) */
@@ -25,12 +27,16 @@ export function resultKind(r: string | void | null | undefined): ToastKind {
 const stripPrefix = (r: string) => r.trim().replace(/^(error|warning)\s*:?\s*/i, "");
 
 /** Turns a thrown error into something the user can act on (production hides server error details). */
-export function friendlyError(e: unknown): string {
+export function friendlyError(e: unknown, t: T = makeT("hi")): string {
   const err = (e && typeof e === "object" ? e : {}) as { message?: string; digest?: string };
   const m = err.message || String(e ?? "");
-  if (/failed to fetch|networkerror|load failed|network request failed/i.test(m)) return "Server tak nahi pahunch paye. Internet check karke dobara try karo.";
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(m)) return t("Server tak nahi pahunch paye. Internet check karke dobara try karo.", "Could not reach the server. Check the internet connection and try again.");
   if (/omitted in production|server components render/i.test(m)) {
-    return `Server pe error aaya${err.digest ? ` (code ${err.digest})` : ""}. Thodi der baad dobara try karo. Baar baar ho to server pe "pm2 logs outreach-web" mein ye code dhundho.`;
+    const code = err.digest ? ` (code ${err.digest})` : "";
+    return t(
+      `Server pe error aaya${code}. Thodi der baad dobara try karo. Baar baar ho to server pe "pm2 logs outreach-web" mein ye code dhundho.`,
+      `The server hit an error${code}. Try again in a moment. If it keeps happening, search for this code in "pm2 logs outreach-web" on the server.`,
+    );
   }
   return m;
 }
@@ -72,6 +78,7 @@ const LOOK: Record<ToastKind, { icon: IconName; color: string; bar: string }> = 
 };
 
 function ToastCard({ t, onClose }: { t: Toast; onClose: () => void }) {
+  const tr = useT().t;
   const look = LOOK[t.kind];
   return (
     <div role={t.kind === "error" ? "alert" : "status"} className="pointer-events-auto relative flex w-full max-w-[380px] animate-toast-in items-start gap-2.5 overflow-hidden rounded-xl bg-white p-3 pl-3.5 pr-2 shadow-pop ring-1 ring-slate-900/[.07]">
@@ -82,15 +89,15 @@ function ToastCard({ t, onClose }: { t: Toast; onClose: () => void }) {
         {t.text && <div className="mt-0.5 max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-600">{t.text}</div>}
         {t.reload ? (
           <button type="button" onClick={() => window.location.reload()} className="mt-1.5 inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:text-indigo-700">
-            {t.cta || "Dobara load karo"} <Icon name="refresh" size={12} />
+            {t.cta || tr("Dobara load karo", "Reload")} <Icon name="refresh" size={12} />
           </button>
         ) : t.href && (
           <Link href={t.href} onClick={onClose} className="mt-1.5 inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:text-indigo-700">
-            {t.cta || "Dekho"} <Icon name="arrow-right" size={12} />
+            {t.cta || tr("Dekho", "Open")} <Icon name="arrow-right" size={12} />
           </Link>
         )}
       </div>
-      <button type="button" onClick={onClose} aria-label="Band karo" className="rounded-md p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600">
+      <button type="button" onClick={onClose} aria-label={tr("Band karo", "Close")} className="rounded-md p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600">
         <Icon name="x" size={14} />
       </button>
     </div>
@@ -99,6 +106,7 @@ function ToastCard({ t, onClose }: { t: Toast; onClose: () => void }) {
 
 export function useToast() {
   const ctx = useContext(Ctx);
+  const { t: tr } = useT();
   return useMemo(() => {
     const show = ctx || (() => {});
     const make = (kind: ToastKind) => (title: string, text?: string, extra?: Partial<ToastInput>) => show({ ...extra, kind, title, text });
@@ -117,15 +125,15 @@ export function useToast() {
         if (kind === "error") {
           // errTitle names what failed; a multi-line message brings its own title; a one-liner goes under a generic title
           if (o.errTitle) show({ kind, title: o.errTitle, text: msg || undefined });
-          else show(rest ? { kind, title: first, text: rest } : { kind, title: "Problem aa gayi", text: msg || undefined });
+          else show(rest ? { kind, title: first, text: rest } : { kind, title: tr("Problem aa gayi", "Something went wrong"), text: msg || undefined });
           return true;
         }
-        if (kind === "warning") { show({ kind, title: rest ? first : "Dhyan do", text: rest || msg || undefined, href: o.href, cta: o.cta }); return false; }
-        show({ kind, title: first || o.okTitle || "Ho gaya", text: rest, href: o.href, cta: o.cta });
+        if (kind === "warning") { show({ kind, title: rest ? first : tr("Dhyan do", "Please note"), text: rest || msg || undefined, href: o.href, cta: o.cta }); return false; }
+        show({ kind, title: first || o.okTitle || tr("Ho gaya", "Done"), text: rest, href: o.href, cta: o.cta });
         return false;
       },
     };
-  }, [ctx]);
+  }, [ctx, tr]);
 }
 
 const fired = new Set<string>();

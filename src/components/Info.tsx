@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./icons";
+import { useT } from "./lang";
 
 const WIDTH = 280;
 
@@ -11,6 +12,7 @@ const WIDTH = 280;
  * and it has an invisible ~32px hit area so a slightly missed tap does not hit the link or field around it.
  */
 export function Info({ text, title, size = 14, className = "", focusable = true }: { text: ReactNode; title?: string; size?: number; className?: string; focusable?: boolean }) {
+  const { t } = useT();
   const btn = useRef<HTMLSpanElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pinned = useRef(false); // opened by click / tap / keyboard: stays open until closed on purpose
@@ -61,7 +63,8 @@ export function Info({ text, title, size = 14, className = "", focusable = true 
         ref={btn}
         role="button"
         tabIndex={focusable ? 0 : -1}
-        aria-label={title ? `${title}: jaankari` : "Jaankari"}
+        data-info=""
+        aria-label={title ? `${title}: ${t("jaankari", "info")}` : t("Jaankari", "Info")}
         aria-expanded={!!pos}
         onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggle(); }}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); toggle(); } }}

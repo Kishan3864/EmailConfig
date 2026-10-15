@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { C, rows, type ImportRow, type LeadList } from "@/lib/fsdb";
+import type { T } from "@/lib/i18n";
+import { getT } from "@/lib/i18n-server";
 import { fmt } from "@/lib/time";
 import type { IconName } from "@/components/icons";
 import { Info } from "@/components/Info";
@@ -8,30 +10,34 @@ import { ToastOnMount } from "@/components/toast";
 import { Badge, Callout, EmptyState, NextStep, PageHeader, Section, Stat, Steps, type StepState, type Tone } from "@/components/ui";
 import { ConfirmImport } from "./ConfirmImport";
 
-export const metadata = { title: "Import preview" };
+export async function generateMetadata() {
+  const { t } = await getT();
+  return { title: t("Import preview", "Import preview") };
+}
 
-// The importer stores its reasons in English; show them in Hinglish (the original text stays in the tooltip).
-const REASON: Record<string, string> = {
-  "no email": "Email nahi hai",
-  "invalid syntax": "Email ka format galat hai",
-  suppressed: "Block list mein hai",
-  "already contacted (in Firebase ledger)": "Pehle contact ho chuka hai (Ledger mein hai)",
-  "already imported in an earlier list": "Pichhli kisi list mein pehle se hai",
-  "marked as chain": "File mein chain mark kiya hai",
-  "chain (3+ rows share this domain/email)": "Chain lagta hai: 3+ rows mein same domain/email",
-  "business already contacted (in Firebase ledger)": "Is business se pehle contact ho chuka hai (Ledger)",
-  "business already imported in an earlier list": "Ye business pichhli list mein pehle se hai",
-  "no MX record": "Domain ka MX record nahi, mail nahi pahunchegi",
-  "looks like a private person's address": "Kisi insaan ka personal address lagta hai",
-  "already imported (race)": "Kisi doosri list se pehle hi import ho chuka hai",
-  failed: "Add nahi ho paya",
+// The importer stores its reasons as short English codes; show them as plain text in the UI language (the original text stays in the tooltip).
+const REASON: Record<string, { hi: string; en: string }> = {
+  "no email": { hi: "Email nahi hai", en: "No email" },
+  "invalid syntax": { hi: "Email ka format galat hai", en: "Invalid email format" },
+  suppressed: { hi: "Block list mein hai", en: "On the Block list" },
+  "already contacted (in Firebase ledger)": { hi: "Pehle contact ho chuka hai (Ledger mein hai)", en: "Already contacted (in the Ledger)" },
+  "already imported in an earlier list": { hi: "Pichhli kisi list mein pehle se hai", en: "Already in an earlier list" },
+  "marked as chain": { hi: "File mein chain mark kiya hai", en: "Marked as a chain in the file" },
+  "chain (3+ rows share this domain/email)": { hi: "Chain lagta hai: 3+ rows mein same domain/email", en: "Looks like a chain: 3+ rows share this domain/email" },
+  "business already contacted (in Firebase ledger)": { hi: "Is business se pehle contact ho chuka hai (Ledger)", en: "This business was already contacted (Ledger)" },
+  "business already imported in an earlier list": { hi: "Ye business pichhli list mein pehle se hai", en: "This business is already in an earlier list" },
+  "no MX record": { hi: "Domain ka MX record nahi, mail nahi pahunchegi", en: "The domain has no MX record, mail would not arrive" },
+  "looks like a private person's address": { hi: "Kisi insaan ka personal address lagta hai", en: "Looks like a person's private address" },
+  "already imported (race)": { hi: "Kisi doosri list se pehle hi import ho chuka hai", en: "Already imported from another list" },
+  failed: { hi: "Add nahi ho paya", en: "Could not be added" },
 };
-function wajah(reason: string) {
+function wajah(reason: string, t: T) {
   const role = reason.match(/^role address \((.+)\)$/);
-  if (role) return `Role address hai (${role[1]}), kisi insaan ka nahi`;
+  if (role) return t(`Role address hai (${role[1]}), kisi insaan ka nahi`, `Role address (${role[1]}), not a person's`);
   const dup = reason.match(/^duplicate business \(kept (.+)\)$/);
-  if (dup) return `Same business ka doosra address (${dup[1]} rakha)`;
-  return REASON[reason] || reason;
+  if (dup) return t(`Same business ka doosra address (${dup[1]} rakha)`, `Another address of the same business (kept ${dup[1]})`);
+  const r = REASON[reason];
+  return r ? t(r.hi, r.en) : reason;
 }
 
 /** Phone version of a Stat tile: three fit in one row. */
@@ -49,6 +55,7 @@ function MiniStat({ href, label, value, dot, info, on }: { href: string; label: 
 }
 
 export default async function ImportPreview({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ f?: string }> }) {
+  const { t } = await getT();
   const id = (await params).id;
   const { f } = await searchParams;
   const ld = await C.lists.doc(id).get();
@@ -61,39 +68,53 @@ export default async function ImportPreview({ params, searchParams }: { params: 
   const send = c.send || 0, review = c.review || 0, skip = c.skip || 0;
   const done = !!list.confirmed;
   const nothing = send + review === 0;
-  // after confirm the 'send' rows are Ready leads, so the page stops saying "Bhejenge" (will send) for them
-  const sendLabel = done ? "Ready" : "Bhejenge";
-  const tabs = [{ f: "", label: "Sab", n: send + review + skip }, { f: "send", label: sendLabel, n: send }, { f: "review", label: "Review", n: review }, { f: "skip", label: "Skip", n: skip }];
+  // after confirm the 'send' rows are Ready leads, so the page stops saying "Bhejenge" / "Will send" for them
+  const sendLabel = done ? "Ready" : t("Bhejenge", "Will send");
+  const tabs = [{ f: "", label: t("Sab", "All"), n: send + review + skip }, { f: "send", label: sendLabel, n: send }, { f: "review", label: "Review", n: review }, { f: "skip", label: "Skip", n: skip }];
   const tabBar = (
     <div className="seg">
-      {tabs.map((t) => (
-        <Link key={t.label} href={t.f ? `/import/${id}?f=${t.f}` : `/import/${id}`} scroll={false} className={`seg-item ${(f || "") === t.f ? "seg-item-on" : ""}`}>
-          {t.label}<span className="tabular-nums text-slate-400">{t.n}</span>
+      {tabs.map((tab) => (
+        <Link key={tab.label} href={tab.f ? `/import/${id}?f=${tab.f}` : `/import/${id}`} scroll={false} className={`seg-item ${(f || "") === tab.f ? "seg-item-on" : ""}`}>
+          {tab.label}<span className="tabular-nums text-slate-400">{tab.n}</span>
         </Link>
       ))}
     </div>
   );
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-  const added = [send && `${send} Ready`, review && `${review} 'Review chahiye'`].filter(Boolean).join(" aur ");
+  const added = [send && `${send} Ready`, review && t(`${review} 'Review chahiye'`, `${review} 'Needs review'`)].filter(Boolean).join(t(" aur ", " and "));
   const steps = (short: boolean): { label: string; state: StepState }[] => [
-    { label: short ? "File do" : "File ya text do", state: "done" },
-    { label: short ? "Check karo" : "Match / check karo", state: "done" },
+    { label: short ? t("File do", "Add file") : t("File ya text do", "Add file or text"), state: "done" },
+    { label: short ? t("Check karo", "Check") : t("Match / check karo", "Map / check"), state: "done" },
     { label: short ? "Confirm" : "Preview & confirm", state: done ? "done" : "current" },
   ];
   // list.counts are frozen at confirm; what happened to the leads after that is only on the Contacts page
-  const snapshot = done ? "\nYe ginti confirm ke waqt ki hai. Leads ka abhi ka status Contacts mein dikhta hai." : "";
+  const snapshot = done
+    ? t("\nYe ginti confirm ke waqt ki hai. Leads ka abhi ka status Contacts mein dikhta hai.", "\nThese counts are from the time of confirming. The leads' current status is shown in Contacts.")
+    : "";
   const stats: { f: string; label: string; short: string; value: number; tone: Tone; icon: IconName; dot: string; sub: string; info: string }[] = [
     {
-      f: "send", label: done ? "Ready hue" : "Bhejenge", short: sendLabel, value: send, tone: "emerald", icon: "send", dot: "bg-emerald-500", sub: done ? "Confirm par Ready bane" : "Confirm par Ready banenge",
-      info: "Ye addresses saare checks pass kar chuke hain: sahi format, MX record, role address nahi, Ledger aur Block list mein nahi. Confirm par ye 'Ready' status ke saath Contacts mein jaate hain aur campaign mein use hote hain." + snapshot,
+      f: "send", label: done ? t("Ready hue", "Became Ready") : t("Bhejenge", "Will send"), short: sendLabel, value: send, tone: "emerald", icon: "send", dot: "bg-emerald-500",
+      sub: done ? t("Confirm par Ready bane", "Made Ready on confirm") : t("Confirm par Ready banenge", "Made Ready when you confirm"),
+      info: t(
+        "Ye addresses saare checks pass kar chuke hain: sahi format, MX record, role address nahi, Ledger aur Block list mein nahi. Confirm par ye 'Ready' status ke saath Contacts mein jaate hain aur campaign mein use hote hain.",
+        "These addresses passed every check: valid format, MX record, not a role address, not in the Ledger or Block list. On confirm they go to Contacts with the 'Ready' status and are used in campaigns.",
+      ) + snapshot,
     },
     {
-      f: "review", label: "Review chahiye", short: "Review", value: review, tone: "amber", icon: "eye", dot: "bg-amber-500", sub: done ? "Review status mein add hue" : "Aapke approval ke baad hi mail",
-      info: "Ye kisi insaan ka personal address lagta hai (jaise naam.surname@ ya gmail). Confirm par ye 'Review chahiye' status mein add hote hain; Contacts mein khud dekh ke approve ya reject karo." + snapshot,
+      f: "review", label: t("Review chahiye", "Needs review"), short: "Review", value: review, tone: "amber", icon: "eye", dot: "bg-amber-500",
+      sub: done ? t("Review status mein add hue", "Added as 'Needs review'") : t("Aapke approval ke baad hi mail", "Mailed only after you approve"),
+      info: t(
+        "Ye kisi insaan ka personal address lagta hai (jaise naam.surname@ ya gmail). Confirm par ye 'Review chahiye' status mein add hote hain; Contacts mein khud dekh ke approve ya reject karo.",
+        "These look like a person's private address (like name.surname@ or gmail). On confirm they are added with the 'Needs review' status; check them yourself in Contacts and approve or reject them.",
+      ) + snapshot,
     },
     {
-      f: "skip", label: done ? "Skip hue" : "Skip honge", short: "Skip", value: skip, tone: "slate", icon: "x-circle", dot: "bg-slate-400", sub: done ? "Add nahi hue" : "Kabhi add nahi honge",
-      info: `Ye rows add nahi ${done ? "hui" : "hongi"}: email nahi ya galat, MX record nahi, role address, chain, duplicate business, Block list, ya pehle contact ho chuka. Har row ki wajah table mein hai.`,
+      f: "skip", label: done ? t("Skip hue", "Skipped") : t("Skip honge", "Will be skipped"), short: "Skip", value: skip, tone: "slate", icon: "x-circle", dot: "bg-slate-400",
+      sub: done ? t("Add nahi hue", "Not added") : t("Kabhi add nahi honge", "Will never be added"),
+      info: t(
+        `Ye rows add nahi ${done ? "hui" : "hongi"}: email nahi ya galat, MX record nahi, role address, chain, duplicate business, Block list, ya pehle contact ho chuka. Har row ki wajah table mein hai.`,
+        `These rows ${done ? "were not" : "will not be"} added: missing or invalid email, no MX record, role address, chain, duplicate business, Block list, or already contacted. The table shows the reason for each row.`,
+      ),
     },
   ];
 
@@ -102,11 +123,17 @@ export default async function ImportPreview({ params, searchParams }: { params: 
       <PageHeader
         title={`${done ? "List" : "Preview"}: ${list.name}`}
         back={{ href: "/import", label: "Import" }}
-        sub={`Kahan se mile: ${list.sourceNote} · ${fmt(list.createdAt)}`}
+        sub={`${t("Kahan se mile", "Source")}: ${list.sourceNote} · ${fmt(list.createdAt)}`}
         info={done
-          ? "Is list ki har row ka import result: Ready (saare checks pass, Ready status mein add hua), Review ('Review chahiye' status mein add hua) ya Skip (add nahi hua).\nTiles ya tabs se filter karo, aur 'Wajah' mein dekho kyun.\nYe ginti import ke waqt ki hai. Leads ka abhi ka status Contacts mein dikhta hai."
-          : "Yahan dikhta hai ki file ki har row ka kya hoga: Bhejenge (saare checks pass), Review chahiye (aap khud dekhoge) ya Skip (add nahi hoga).\nTiles ya tabs se filter karo, aur 'Wajah' mein dekho kyun.\nConfirm karne par hi leads Contacts mein add hote hain; skip wale kabhi add nahi hote."}
-        actions={done ? <Badge v="done" label="Import ho chuka" tone="emerald" /> : <Badge v="draft" label="Confirm baaki hai" tone="amber" />}
+          ? t(
+            "Is list ki har row ka import result: Ready (saare checks pass, Ready status mein add hua), Review ('Review chahiye' status mein add hua) ya Skip (add nahi hua).\nTiles ya tabs se filter karo, aur 'Wajah' mein dekho kyun.\nYe ginti import ke waqt ki hai. Leads ka abhi ka status Contacts mein dikhta hai.",
+            "The import result of every row in this list: Ready (passed all checks, added with the Ready status), Review (added with the 'Needs review' status) or Skip (not added).\nFilter with the tiles or tabs, and see why under 'Reason'.\nThese counts are from the time of the import. The leads' current status is shown in Contacts.",
+          )
+          : t(
+            "Yahan dikhta hai ki file ki har row ka kya hoga: Bhejenge (saare checks pass), Review chahiye (aap khud dekhoge) ya Skip (add nahi hoga).\nTiles ya tabs se filter karo, aur 'Wajah' mein dekho kyun.\nConfirm karne par hi leads Contacts mein add hote hain; skip wale kabhi add nahi hote.",
+            "This shows what will happen to each row of the file: Will send (passed all checks), Needs review (you check it yourself) or Skip (not added).\nFilter with the tiles or tabs, and see why under 'Reason'.\nLeads are added to Contacts only when you confirm; skipped rows are never added.",
+          )}
+        actions={done ? <Badge v="done" label={t("Import ho chuka", "Imported")} tone="emerald" /> : <Badge v="draft" label={t("Confirm baaki hai", "Not confirmed yet")} tone="amber" />}
       />
 
       <div className="space-y-4">
@@ -116,14 +143,18 @@ export default async function ImportPreview({ params, searchParams }: { params: 
         </div>
 
         {done && (
-          <Callout tone="success" title="Ye list import ho chuki hai">
-            {added ? `Contacts mein add hue: ${added}.` : "Is list se koi lead add nahi hua."}{skip ? ` ${plural(skip, "row", "rows")} skip hui.` : ""}
+          <Callout tone="success" title={t("Ye list import ho chuki hai", "This list has been imported")}>
+            {added ? t(`Contacts mein add hue: ${added}.`, `Added to Contacts: ${added}.`) : t("Is list se koi lead add nahi hua.", "No leads were added from this list.")}
+            {skip ? t(` ${plural(skip, "row", "rows")} skip hui.`, ` ${plural(skip, "row was", "rows were")} skipped.`) : ""}
           </Callout>
         )}
         {!done && nothing && (
           <>
-            <Callout tone="warn" title="Is list mein bhejne layak koi address nahi">Saari rows skip hongi, isliye confirm karne se kuch add nahi hoga. Wajah neeche table mein dekho.</Callout>
-            <ToastOnMount kind="warning" title="Koi address bhejne layak nahi" text="Is list ki saari rows skip hongi. Doosri file import karke dekho." once={`import-empty:${id}`} />
+            <Callout tone="warn" title={t("Is list mein bhejne layak koi address nahi", "This list has no address that can be mailed")}>
+              {t("Saari rows skip hongi, isliye confirm karne se kuch add nahi hoga. Wajah neeche table mein dekho.", "Every row will be skipped, so confirming adds nothing. See the reasons in the table below.")}
+            </Callout>
+            <ToastOnMount kind="warning" title={t("Koi address bhejne layak nahi", "No address can be mailed")}
+              text={t("Is list ki saari rows skip hongi. Doosri file import karke dekho.", "Every row of this list will be skipped. Try importing another file.")} once={`import-empty:${id}`} />
           </>
         )}
 
@@ -139,55 +170,76 @@ export default async function ImportPreview({ params, searchParams }: { params: 
         {done ? (
           // counts are from confirm time and the leads may have moved on since, so this is worded as history
           review > 0 ? (
-            <NextStep href="/contacts?status=needs_review" cta="Review wale dekho"
-              text={<>Import ke waqt {plural(review, "lead", "leads")} &apos;Review chahiye&apos; mein {review === 1 ? "gaya tha" : "gaye the"}. Agar abhi tak approve ya reject nahi kiya, to Contacts mein karo, phir campaign banao.</>} />
+            <NextStep href="/contacts?status=needs_review" cta={t("Review wale dekho", "See leads to review")}
+              text={t(
+                <>Import ke waqt {plural(review, "lead", "leads")} &apos;Review chahiye&apos; mein {review === 1 ? "gaya tha" : "gaye the"}. Agar abhi tak approve ya reject nahi kiya, to Contacts mein karo, phir campaign banao.</>,
+                <>At import time, {plural(review, "lead", "leads")} went to &apos;Needs review&apos;. If you have not approved or rejected {review === 1 ? "it" : "them"} yet, do it in Contacts, then create a campaign.</>,
+              )} />
           ) : send > 0 ? (
-            <NextStep href="/campaigns" cta="Campaigns kholo"
-              text={<>Import ke waqt {plural(send, "lead", "leads")} Ready {send === 1 ? "bana tha" : "bane the"}. Agar is list se abhi tak campaign nahi banaya, to Campaigns page pe banao: pehle 5 sample mails banti hain, unhe approve karte hi campaign shuru hota hai.</>} />
+            <NextStep href="/campaigns" cta={t("Campaigns kholo", "Open Campaigns")}
+              text={t(
+                <>Import ke waqt {plural(send, "lead", "leads")} Ready {send === 1 ? "bana tha" : "bane the"}. Agar is list se abhi tak campaign nahi banaya, to Campaigns page pe banao: pehle 5 sample mails banti hain, unhe approve karte hi campaign shuru hota hai.</>,
+                <>At import time, {plural(send, "lead was", "leads were")} made Ready. If you have not created a campaign from this list yet, create one on the Campaigns page: 5 sample mails are made first, and the campaign starts as soon as you approve them.</>,
+              )} />
           ) : (
-            <NextStep tone="amber" href="/import" cta="Nayi list import karo" text="Is list se koi lead add nahi hua. Doosri file import karo." />
+            <NextStep tone="amber" href="/import" cta={t("Nayi list import karo", "Import a new list")}
+              text={t("Is list se koi lead add nahi hua. Doosri file import karo.", "No leads were added from this list. Import another file.")} />
           )
         ) : nothing ? (
-          <NextStep tone="amber" href="/import" cta="Doosri file import karo" text="Is list se kuch add nahi hoga. Doosri file try karo, ya confirm karke is list ko band kar do.">
+          <NextStep tone="amber" href="/import" cta={t("Doosri file import karo", "Import another file")}
+            text={t("Is list se kuch add nahi hoga. Doosri file try karo, ya confirm karke is list ko band kar do.", "Nothing will be added from this list. Try another file, or confirm to close this list.")}>
             <ConfirmImport listId={id} review={review} expected={send + review} className="btn" />
           </NextStep>
         ) : (
-          <NextStep text={<>Rows check karo, phir confirm karo. Confirm karne par sirf <b>&apos;Bhejenge&apos;</b> aur <b>&apos;Review&apos;</b> wale leads add honge; skip wale nahi.</>}>
+          <NextStep text={t(
+            <>Rows check karo, phir confirm karo. Confirm karne par sirf <b>&apos;Bhejenge&apos;</b> aur <b>&apos;Review&apos;</b> wale leads add honge; skip wale nahi.</>,
+            <>Check the rows, then confirm. Confirming adds only the <b>&apos;Will send&apos;</b> and <b>&apos;Review&apos;</b> leads; skipped rows are not added.</>,
+          )}>
             <ConfirmImport listId={id} review={review} expected={send + review} />
           </NextStep>
         )}
 
-        <Section flush icon="list" title="Har row ka result" sub={`${plural(items.length, "row", "rows")} dikh rahi ${items.length === 1 ? "hai" : "hain"}${items.length >= 1000 ? " (sirf pehli 1000)" : ""}`}
+        <Section flush icon="list" title={t("Har row ka result", "Result for each row")}
+          sub={t(
+            `${plural(items.length, "row", "rows")} dikh rahi ${items.length === 1 ? "hai" : "hain"}${items.length >= 1000 ? " (sirf pehli 1000)" : ""}`,
+            `Showing ${plural(items.length, "row", "rows")}${items.length >= 1000 ? " (first 1000 only)" : ""}`,
+          )}
           info={done
-            ? "File ki har row aur uska import result. Ready = Ready status mein add hua, Review = 'Review chahiye' mein add hua, Skip = add nahi hua.\nTabs se filter karo. Ek baar mein max 1000 rows dikhti hain."
-            : "File ki har row aur uska result. Bhejenge = add hoke campaign mein jayega, Review = aapke approval ke baad, Skip = add nahi hoga.\nTabs se filter karo. Ek baar mein max 1000 rows dikhti hain."}
+            ? t(
+              "File ki har row aur uska import result. Ready = Ready status mein add hua, Review = 'Review chahiye' mein add hua, Skip = add nahi hua.\nTabs se filter karo. Ek baar mein max 1000 rows dikhti hain.",
+              "Every row of the file and its import result. Ready = added with the Ready status, Review = added as 'Needs review', Skip = not added.\nFilter with the tabs. At most 1000 rows are shown at a time.",
+            )
+            : t(
+              "File ki har row aur uska result. Bhejenge = add hoke campaign mein jayega, Review = aapke approval ke baad, Skip = add nahi hoga.\nTabs se filter karo. Ek baar mein max 1000 rows dikhti hain.",
+              "Every row of the file and its result. Will send = added and goes into a campaign, Review = only after your approval, Skip = not added.\nFilter with the tabs. At most 1000 rows are shown at a time.",
+            )}
           actions={<div className="max-sm:hidden">{tabBar}</div>}>
           {/* phones: the tabs get a row of their own; next to the title they squeeze it to one word per line */}
           <div className="border-b border-slate-100 px-4 py-2.5 sm:hidden">{tabBar}</div>
           {items.length ? (
             <div className="overflow-x-auto">
               <table className="tbl tbl-stack">
-                <thead><tr><th className="w-12">#</th><th>Result</th><th>Wajah</th><th>Email</th><th>Business</th><th>Website</th><th>Desh</th></tr></thead>
+                <thead><tr><th className="w-12">#</th><th>Result</th><th>{t("Wajah", "Reason")}</th><th>Email</th><th>Business</th><th>Website</th><th>{t("Desh", "Country")}</th></tr></thead>
                 <tbody>
                   {items.map((r) => (
                     <tr key={r.id}>
                       <td data-label="Row" className="tabular-nums text-slate-400">{r.rowNo}</td>
                       <td data-label="Result"><Badge v={r.outcome} label={r.outcome === "send" ? sendLabel : undefined} /></td>
-                      <td data-label="Wajah" className="text-xs text-slate-500" title={r.reason || undefined}>{r.reason ? wajah(r.reason) : r.outcome === "send" ? "Saare checks pass" : null}</td>
+                      <td data-label={t("Wajah", "Reason")} className="text-xs text-slate-500" title={r.reason || undefined}>{r.reason ? wajah(r.reason, t) : r.outcome === "send" ? t("Saare checks pass", "Passed all checks") : null}</td>
                       {/* only the stacked phone cards may break an address anywhere; in the desktop table it would squeeze the column */}
                       <td data-label="Email" className="font-medium text-slate-900 max-md:[overflow-wrap:anywhere]">{r.email}</td>
                       <td data-label="Business">{r.businessName}</td>
                       <td data-label="Website">{r.website && <span className="block min-w-0 max-w-[220px] truncate" title={r.website}>{r.website}</span>}</td>
-                      <td data-label="Desh">{r.country}</td>
+                      <td data-label={t("Desh", "Country")}>{r.country}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           ) : f ? (
-            <EmptyState icon="filter" title="Is filter mein koi row nahi" text="Doosra tab chuno ya saari rows dekho." href={`/import/${id}`} cta="Saari rows dekho" />
+            <EmptyState icon="filter" title={t("Is filter mein koi row nahi", "No rows in this filter")} text={t("Doosra tab chuno ya saari rows dekho.", "Choose another tab or see all rows.")} href={`/import/${id}`} cta={t("Saari rows dekho", "See all rows")} />
           ) : (
-            <EmptyState icon="file" title="Is list mein koi row nahi" text="Nayi file import karke dobara try karo." href="/import" cta="Nayi file import karo" />
+            <EmptyState icon="file" title={t("Is list mein koi row nahi", "This list has no rows")} text={t("Nayi file import karke dobara try karo.", "Import a new file and try again.")} href="/import" cta={t("Nayi file import karo", "Import a new file")} />
           )}
         </Section>
       </div>

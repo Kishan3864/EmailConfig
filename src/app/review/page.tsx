@@ -2,6 +2,8 @@ import Link from "next/link";
 import { C, rows, type Campaign, type Message, type Lead, type LeadList } from "@/lib/fsdb";
 import { getSettings } from "@/lib/settings";
 import { fullText } from "@/lib/compose";
+import type { T } from "@/lib/i18n";
+import { getT } from "@/lib/i18n-server";
 import { LOGO_HEIGHT, LOGO_PNG_BASE64, LOGO_WIDTH } from "@/lib/logo";
 import { ActionButton } from "@/components/ActionButton";
 import { factChips, parseFacts } from "@/components/factChips";
@@ -12,32 +14,37 @@ import { Badge, Callout, EmptyState, MailPreview, NextStep, PageHeader } from "@
 import { approveMessage, approveAllShown, rejectMessage, regenerateDraft } from "../actions";
 import { DraftEditor } from "./DraftEditor";
 
-export const metadata = { title: "Approve karo" };
+export async function generateMetadata() {
+  const { t } = await getT();
+  return { title: t("Approve karo", "Approve mails") };
+}
 
 /**
  * The worker only sends mails of a running campaign whose samples were approved (trySendOne in lib/sender.ts).
  * For any other campaign, approving here alone sends nothing: the card says why.
  */
-function campaignHold(c: Campaign | null): { title: string; text: string } | null {
-  if (!c) return { title: "Is mail ka campaign nahi mila", text: "Approve karne pe bhi ye mail nahi jayegi." };
+function campaignHold(c: Campaign | null, t: T): { title: string; text: string } | null {
+  if (!c) return { title: t("Is mail ka campaign nahi mila", "This mail's campaign was not found"), text: t("Approve karne pe bhi ye mail nahi jayegi.", "Even if you approve it, this mail will not be sent.") };
   if (!c.samplesApproved) {
-    return { title: "Campaign abhi start nahi hua", text: "Sirf approve karne se ye mail nahi jayegi. Campaign page pe samples padho aur ‘Samples theek hain: approve karke start karo’ dabao." };
+    return {
+      title: t("Campaign abhi start nahi hua", "The campaign has not started yet"),
+      text: t(
+        "Sirf approve karne se ye mail nahi jayegi. Campaign page pe samples padho aur ‘Samples theek hain: approve karke start karo’ dabao.",
+        "Approving alone will not send this mail. Read the samples on the Campaign page and press ‘Samples look good: approve and start’.",
+      ),
+    };
   }
-  if (c.status === "paused") return { title: "Campaign ruka hua hai", text: "Approve ki hui mail tabhi jayegi jab Campaign page pe ‘Resume karo’ dabaoge." };
-  if (c.status === "done") return { title: "Campaign poora ho chuka hai", text: "Approve karne pe bhi ye mail nahi jayegi." };
-  if (c.status !== "running") return { title: "Campaign chal nahi raha", text: "Approve karne pe bhi ye mail nahi jayegi." };
+  if (c.status === "paused") return { title: t("Campaign ruka hua hai", "The campaign is paused"), text: t("Approve ki hui mail tabhi jayegi jab Campaign page pe ‘Resume karo’ dabaoge.", "An approved mail goes out only after you press ‘Resume’ on the Campaign page.") };
+  if (c.status === "done") return { title: t("Campaign poora ho chuka hai", "The campaign has already finished"), text: t("Approve karne pe bhi ye mail nahi jayegi.", "Even if you approve it, this mail will not be sent.") };
+  if (c.status !== "running") return { title: t("Campaign chal nahi raha", "The campaign is not running"), text: t("Approve karne pe bhi ye mail nahi jayegi.", "Even if you approve it, this mail will not be sent.") };
   return null;
 }
 
 /** Phones: long labels (e.g. the armed Reject text) wrap inside the button instead of overflowing the 2-column grid. */
 const WRAP = "max-sm:h-auto max-sm:min-h-9 max-sm:whitespace-normal max-sm:py-1.5 max-sm:text-center max-sm:leading-tight";
 
-const INFO = `AI ki likhi har mail yahan rukti hai: aapke approve kiye bina koi mail nahi jaati.
-Approve karo = mail sending window mein jayegi (jab uska campaign chal raha ho). Naya version = AI dobara likhega.
-Reject karo = is lead ko kabhi mail nahi jayegi. Edit = text khud badlo, same rules check honge.
-DRY-RUN mein approve ki hui mail test address pe jaati hai. Approval yaad rehta hai: LIVE on karne ke baad wahi mail asli lead ko bhi jayegi.`;
-
 export default async function Review() {
+  const { t, lang } = await getT();
   const s = await getSettings();
   const pending = rows<Message>(await C.messages.where("approved", "==", false).where("status", "==", "ready").orderBy("createdAt").limit(50).get());
   const leads = new Map<string, Lead>();
@@ -55,48 +62,77 @@ export default async function Review() {
     if (!lists.has(lead.listId)) lists.set(lead.listId, (await C.lists.doc(lead.listId).get()).data() as LeadList);
   }
   const n = pending.length;
-  const holdOf = (m: Message) => (m.campaignId ? campaignHold(campaigns.get(m.campaignId) ?? null) : null);
+  const holdOf = (m: Message) => (m.campaignId ? campaignHold(campaigns.get(m.campaignId) ?? null, t) : null);
   const held = pending.filter((m) => holdOf(m));
   // the campaigns behind the held mails that can be opened (one → link straight to it)
   const heldCampaigns = [...new Set(held.map((m) => m.campaignId))].filter((id) => campaigns.get(id));
   const sentHref = s.dryRun ? "/sent?mode=dry" : "/sent";
   const sendLine = s.dryRun
-    ? "Approve ki hui mails sending window mein ek-ek karke aapke test address pe jayengi; wo Sent page ke Dry-run tab mein dikhengi."
-    : "Approve ki hui mails sending window mein ek-ek karke jayengi. Kya gaya, wo Sent page pe dikhega.";
+    ? t(
+      "Approve ki hui mails sending window mein ek-ek karke aapke test address pe jayengi; wo Sent page ke Dry-run tab mein dikhengi.",
+      "Approved mails go to your test address one by one in the sending window; they show up in the Dry-run tab of the Sent page.",
+    )
+    : t(
+      "Approve ki hui mails sending window mein ek-ek karke jayengi. Kya gaya, wo Sent page pe dikhega.",
+      "Approved mails go out one by one in the sending window. What was sent shows up on the Sent page.",
+    );
+  const info = t(
+    `AI ki likhi har mail yahan rukti hai: aapke approve kiye bina koi mail nahi jaati.
+Approve karo = mail sending window mein jayegi (jab uska campaign chal raha ho). Naya version = AI dobara likhega.
+Reject karo = is lead ko kabhi mail nahi jayegi. Edit = text khud badlo, same rules check honge.
+DRY-RUN mein approve ki hui mail test address pe jaati hai. Approval yaad rehta hai: LIVE on karne ke baad wahi mail asli lead ko bhi jayegi.`,
+    `Every mail the AI writes waits here: no mail goes out without your approval.
+Approve = the mail goes out in the sending window (while its campaign is running). New version = the AI writes it again.
+Reject = this lead will never be emailed. Edit = change the text yourself; the same rules are checked.
+In DRY-RUN an approved mail goes to your test address. The approval is kept: once LIVE is on, the same mail also goes to the real lead.`,
+  );
 
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Mails approve karo"
-        info={INFO}
+        title={t("Mails approve karo", "Approve mails")}
+        info={info}
         sub={n
-          ? `${n} ${n === 1 ? "mail aapke approval ka wait kar rahi hai" : "mails aapke approval ka wait kar rahi hain"}${n === 50 ? " (pehli 50 dikh rahi hain)" : ""}`
-          : "Abhi koi mail aapke approval ka wait nahi kar rahi"}
+          ? t(
+            `${n} ${n === 1 ? "mail aapke approval ka wait kar rahi hai" : "mails aapke approval ka wait kar rahi hain"}${n === 50 ? " (pehli 50 dikh rahi hain)" : ""}`,
+            `${n} ${n === 1 ? "mail is waiting for your approval" : "mails are waiting for your approval"}${n === 50 ? " (showing the first 50)" : ""}`,
+          )
+          : t("Abhi koi mail aapke approval ka wait nahi kar rahi", "No mails are waiting for your approval right now")}
         actions={n > 1 && (
-          <ActionButton action={approveAllShown.bind(null, pending.map((m) => m.id))} label={`Sab ${n} approve karo`} icon="check-check" className="btn w-full sm:w-auto"
-            confirmText={`Dobara dabao: sab ${n} mails approve hongi`} next="/sent" nextCta="Sent page dekho" />
+          <ActionButton action={approveAllShown.bind(null, pending.map((m) => m.id))} label={t(`Sab ${n} approve karo`, `Approve all ${n}`)} icon="check-check" className="btn w-full sm:w-auto"
+            confirmText={t(`Dobara dabao: sab ${n} mails approve hongi`, `Click again: approve all ${n} mails`)} next="/sent" nextCta={t("Sent page dekho", "See sent mails")} />
         )}
       />
 
       {s.dryRun ? (
         <Callout tone={s.testEmail ? "warn" : "danger"} title="DRY-RUN mode" action={s.testEmail
-          ? <Link href="/#mode" className="btn btn-sm">Mode dekho</Link>
-          : <Link href="/settings" className="btn btn-sm">Settings kholo</Link>}>
+          ? <Link href="/#mode" className="btn btn-sm">{t("Mode dekho", "See mode")}</Link>
+          : <Link href="/settings" className="btn btn-sm">{t("Settings kholo", "Open settings")}</Link>}>
           {s.testEmail
-            ? `Abhi approve ki hui mails sirf aapke test address (${s.testEmail}) pe jayengi. Dhyan do: approval yaad rehta hai, LIVE on karne ke baad yahi mails bina dobara pooche asli leads ko jayengi. Sirf wahi approve karo jo sach mein lead ko bhejni hai.`
-            : "Approve ki hui mails sirf test address pe jayengi, lekin Settings mein Test address abhi set nahi hai. Dhyan do: approval yaad rehta hai, LIVE on karne ke baad yahi mails bina dobara pooche asli leads ko jayengi."}
+            ? t(
+              `Abhi approve ki hui mails sirf aapke test address (${s.testEmail}) pe jayengi. Dhyan do: approval yaad rehta hai, LIVE on karne ke baad yahi mails bina dobara pooche asli leads ko jayengi. Sirf wahi approve karo jo sach mein lead ko bhejni hai.`,
+              `For now, approved mails go only to your test address (${s.testEmail}). Note: the approval is kept; once LIVE is on, these same mails go to the real leads without asking again. Only approve what you really want to send to the lead.`,
+            )
+            : t(
+              "Approve ki hui mails sirf test address pe jayengi, lekin Settings mein Test address abhi set nahi hai. Dhyan do: approval yaad rehta hai, LIVE on karne ke baad yahi mails bina dobara pooche asli leads ko jayengi.",
+              "Approved mails go only to the test address, but no Test address is set in Settings yet. Note: the approval is kept; once LIVE is on, these same mails go to the real leads without asking again.",
+            )}
         </Callout>
       ) : (
-        <Callout tone="info" title="LIVE mode">Approve ki hui mails asli leads ko jayengi. Approve karne se pehle har mail dhyan se padho.</Callout>
+        <Callout tone="info" title="LIVE mode">{t("Approve ki hui mails asli leads ko jayengi. Approve karne se pehle har mail dhyan se padho.", "Approved mails go to the real leads. Read every mail carefully before you approve it.")}</Callout>
       )}
       {!s.approveEach && (
-        <Callout tone="warn" title="Auto-approve on hai" action={<Link href="/settings" className="btn btn-sm">Settings kholo</Link>}>
-          Settings mein &quot;Har mail approve karke hi bhejo&quot; off hai, isliye nayi drafts apne aap approve ho jaati hain.
+        <Callout tone="warn" title={t("Auto-approve on hai", "Auto-approve is on")} action={<Link href="/settings" className="btn btn-sm">{t("Settings kholo", "Open settings")}</Link>}>
+          {t(
+            <>Settings mein &quot;Har mail approve karke hi bhejo&quot; off hai, isliye nayi drafts apne aap approve ho jaati hain.</>,
+            <>&quot;Approve every mail before sending&quot; is off in Settings, so new drafts are approved automatically.</>,
+          )}
         </Callout>
       )}
       {s.dryRun && !s.testEmail && (
-        <ToastOnMount kind="warning" title="Test address set nahi hai" text="DRY-RUN mein approve ki hui mails test address pe jaati hain. Settings mein Test address daalo."
-          href="/settings" cta="Settings kholo" once="review:no-test-address" />
+        <ToastOnMount kind="warning" title={t("Test address set nahi hai", "No test address set")}
+          text={t("DRY-RUN mein approve ki hui mails test address pe jaati hain. Settings mein Test address daalo.", "In DRY-RUN, approved mails go to the test address. Add a Test address in Settings.")}
+          href="/settings" cta={t("Settings kholo", "Open settings")} once="review:no-test-address" />
       )}
 
       {pending.map((m, i) => {
@@ -112,13 +148,16 @@ export default async function Review() {
             footer={(
               <div className="flex items-start gap-1.5 border-t border-indigo-100 px-3 py-2 text-2xs leading-relaxed text-slate-500">
                 <Icon name="info" size={12} className="mt-px shrink-0 text-indigo-400" />
-                Sirf aapke padhne ke liye. Lead ko ye nahi jaata, use sirf &quot;Mail (jaisi jayegi)&quot; wala text jaata hai.
+                {t(
+                  <>Sirf aapke padhne ke liye. Lead ko ye nahi jaata, use sirf &quot;Mail (jaisi jayegi)&quot; wala text jaata hai.</>,
+                  <>Only for you to read. The lead does not get this; they only get the &quot;Mail (as it will be sent)&quot; text.</>,
+                )}
               </div>
             )} />
         ) : m.language !== "en" ? (
           <div className="min-w-0">
             <div className="mb-1.5 flex items-center gap-1.5 text-2xs font-bold uppercase tracking-wider text-slate-400"><Icon name="globe" size={12} />English translation</div>
-            <div className="rounded-lg border border-dashed border-slate-200 px-4 py-6 text-center text-xs text-slate-500">Translation nahi hai, kyunki ye text aapne khud edit kiya hai.</div>
+            <div className="rounded-lg border border-dashed border-slate-200 px-4 py-6 text-center text-xs text-slate-500">{t("Translation nahi hai, kyunki ye text aapne khud edit kiya hai.", "No translation, because you edited this text yourself.")}</div>
           </div>
         ) : null;
         return (
@@ -129,7 +168,7 @@ export default async function Review() {
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <Link href={`/contacts/${encodeURIComponent(m.leadId)}`} className="min-w-0 truncate text-sm font-semibold text-slate-900 hover:text-indigo-600">{name}</Link>
                   <Badge v="language" label={m.language.toUpperCase()} tone="indigo" dot={false} />
-                  {edited && <Badge v="edited" label="Aapne edit kiya" tone="amber" />}
+                  {edited && <Badge v="edited" label={t("Aapne edit kiya", "Edited by you")} tone="amber" />}
                 </div>
                 <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-500">
                   <span className="inline-flex min-w-0 max-w-full items-center gap-1"><Icon name="mail" size={12} className="text-slate-400" /><span className="truncate">{m.leadEmail}</span></span>
@@ -142,47 +181,55 @@ export default async function Review() {
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-1.5 pt-0.5">
-                <span className="text-2xs font-medium tabular-nums text-slate-400" title={`${n} mein se mail number ${i + 1}`}>{i + 1}/{n}</span>
-                <Info title="Ye card kya hai" size={13} text="Is lead ke liye AI ki likhi draft. Naam pe click karo to contact ki poori history khulegi, campaign ke naam pe click karo to campaign ka page. Facts aur mail padho, phir neeche se Approve, Edit, Naya version ya Reject karo." />
+                <span className="text-2xs font-medium tabular-nums text-slate-400" title={t(`${n} mein se mail number ${i + 1}`, `Mail ${i + 1} of ${n}`)}>{i + 1}/{n}</span>
+                <Info title={t("Ye card kya hai", "About this card")} size={13}
+                  text={t(
+                    "Is lead ke liye AI ki likhi draft. Naam pe click karo to contact ki poori history khulegi, campaign ke naam pe click karo to campaign ka page. Facts aur mail padho, phir neeche se Approve, Edit, Naya version ya Reject karo.",
+                    "The draft the AI wrote for this lead. Click the name to open the contact's full history, or the campaign name to open the campaign page. Read the facts and the mail, then choose Approve, Edit, New version or Reject below.",
+                  )} />
               </div>
             </header>
 
             <div className="space-y-4 p-4 sm:p-5">
               {hold && (
                 <Callout tone="warn" title={hold.title}
-                  action={camp && <Link href={`/campaigns/${camp.id}`} className="btn btn-sm">Campaign kholo</Link>}>
+                  action={camp && <Link href={`/campaigns/${camp.id}`} className="btn btn-sm">{t("Campaign kholo", "Open campaign")}</Link>}>
                   {hold.text}
                 </Callout>
               )}
               <div className="rounded-lg bg-slate-50 px-3 py-2.5">
                 <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
-                  <Icon name="search" size={13} className="text-slate-400" />AI ko ye facts mile:
-                  <Info title="Website ke facts" size={13} text="Homepage check karke AI ko bilkul yahi baatein di gayi thi, isse zyada kuch nahi. Mail mein website ke baare mein jo likha hai wo inse match hona chahiye; galat lage to Edit ya Reject karo." />
+                  <Icon name="search" size={13} className="text-slate-400" />{t("AI ko ye facts mile:", "Facts given to the AI:")}
+                  <Info title={t("Website ke facts", "Website facts")} size={13}
+                    text={t(
+                      "Homepage check karke AI ko bilkul yahi baatein di gayi thi, isse zyada kuch nahi. Mail mein website ke baare mein jo likha hai wo inse match hona chahiye; galat lage to Edit ya Reject karo.",
+                      "After the homepage check, the AI was given exactly these points and nothing more. Whatever the mail says about the website must match them; if something looks wrong, Edit or Reject.",
+                    )} />
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  {factChips(facts).map((b, j) => <span key={j} className="max-w-full break-words rounded-md bg-white px-2 py-0.5 text-xs text-slate-700 ring-1 ring-inset ring-slate-200">{b}</span>)}
+                  {factChips(facts, lang).map((b, j) => <span key={j} className="max-w-full break-words rounded-md bg-white px-2 py-0.5 text-xs text-slate-700 ring-1 ring-inset ring-slate-200">{b}</span>)}
                 </div>
               </div>
 
               <div className={translation ? "grid gap-4 md:grid-cols-2" : "max-w-2xl"}>
-                <MailPreview label="Mail (jaisi jayegi)" subject={m.subject} text={fullText(s, m.body, m.language, list?.sourceNote || "")}
+                <MailPreview label={t("Mail (jaisi jayegi)", "Mail (as it will be sent)")} subject={m.subject} text={fullText(s, m.body, m.language, list?.sourceNote || "")}
                   footer={s.signatureLogo ? (
                     <div className="border-t border-slate-100 px-3 py-2.5">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={`data:image/png;base64,${LOGO_PNG_BASE64}`} width={LOGO_WIDTH} height={LOGO_HEIGHT} alt="Signature ka logo" className="h-auto max-w-full" />
-                      <div className="mt-1 text-2xs text-slate-400">Ye logo signature ke saath mail mein judta hai</div>
+                      <img src={`data:image/png;base64,${LOGO_PNG_BASE64}`} width={LOGO_WIDTH} height={LOGO_HEIGHT} alt={t("Signature ka logo", "Signature logo")} className="h-auto max-w-full" />
+                      <div className="mt-1 text-2xs text-slate-400">{t("Ye logo signature ke saath mail mein judta hai", "This logo is added to the mail with the signature")}</div>
                     </div>
                   ) : undefined} />
                 {translation}
               </div>
             </div>
 
-            {/* phones: Approve full width, then Edit + Naya version, then Reject; DraftEditor's form always goes last */}
+            {/* phones: Approve full width, then Edit + New version, then Reject; DraftEditor's form always goes last */}
             <footer className="grid grid-cols-2 gap-2 border-t border-slate-100 bg-slate-50/60 px-4 py-3 sm:flex sm:flex-wrap sm:items-center sm:px-5">
-              <ActionButton action={approveMessage.bind(null, m.id)} label="Approve karo" icon="check" className={`btn-success col-span-2 ${WRAP}`} />
+              <ActionButton action={approveMessage.bind(null, m.id)} label={t("Approve karo", "Approve")} icon="check" className={`btn-success col-span-2 ${WRAP}`} />
               <DraftEditor id={m.id} subject={m.subject} body={m.body} language={m.language} businessName={m.businessName || ""} />
-              <ActionButton action={regenerateDraft.bind(null, m.id)} label="Naya version likho" icon="refresh" pendingText="AI likh raha hai…" className={`btn ${WRAP}`} />
-              <ActionButton action={rejectMessage.bind(null, m.id)} label="Reject karo" icon="x" confirmText="Dobara dabao: ye lead kabhi mail nahi paayega"
+              <ActionButton action={regenerateDraft.bind(null, m.id)} label={t("Naya version likho", "Write a new version")} icon="refresh" pendingText={t("AI likh raha hai…", "AI is writing…")} className={`btn ${WRAP}`} />
+              <ActionButton action={rejectMessage.bind(null, m.id)} label={t("Reject karo", "Reject")} icon="x" confirmText={t("Dobara dabao: ye lead kabhi mail nahi paayega", "Click again: this lead will never be emailed")}
                 className={`btn col-span-2 text-red-600 hover:border-red-200 hover:bg-red-50 hover:text-red-700 sm:ml-auto ${WRAP}`} />
             </footer>
           </article>
@@ -190,23 +237,36 @@ export default async function Review() {
       })}
 
       {n > 0 && held.length === n ? (
-        <NextStep tone="amber" text="In mails ka campaign abhi chal nahi raha, isliye approve karne pe bhi ye abhi nahi jayengi. Campaign page pe samples padh ke campaign start karo, ya ruka hua campaign Resume karo."
-          href={heldCampaigns.length === 1 ? `/campaigns/${heldCampaigns[0]}` : "/campaigns"} cta={heldCampaigns.length === 1 ? "Campaign kholo" : "Campaigns dekho"} />
+        <NextStep tone="amber"
+          text={t(
+            "In mails ka campaign abhi chal nahi raha, isliye approve karne pe bhi ye abhi nahi jayengi. Campaign page pe samples padh ke campaign start karo, ya ruka hua campaign Resume karo.",
+            "The campaign for these mails is not running right now, so they will not go out yet, even if you approve them. Read the samples on the Campaign page and start the campaign, or resume a paused campaign.",
+          )}
+          href={heldCampaigns.length === 1 ? `/campaigns/${heldCampaigns[0]}` : "/campaigns"}
+          cta={heldCampaigns.length === 1 ? t("Campaign kholo", "Open campaign") : t("Campaigns dekho", "See campaigns")} />
       ) : n > 0 ? (
-        <NextStep text={held.length ? `${sendLine} Jis card pe campaign ki warning hai, wo mail campaign chalne tak nahi jayegi.` : sendLine}
-          href={sentHref} cta={s.dryRun ? "Dry-run mails dekho" : "Sent page dekho"} />
+        <NextStep
+          text={held.length
+            ? t(`${sendLine} Jis card pe campaign ki warning hai, wo mail campaign chalne tak nahi jayegi.`, `${sendLine} A mail whose card shows a campaign warning will not go out until its campaign runs.`)
+            : sendLine}
+          href={sentHref} cta={s.dryRun ? t("Dry-run mails dekho", "See dry-run mails") : t("Sent page dekho", "See sent mails")} />
       ) : (
         <>
           {/* one primary action per screen: the NextStep below; the empty card only offers a secondary link */}
           <div className="card">
-            <EmptyState icon="check-check" title="Koi mail approval ke liye nahi ruki"
+            <EmptyState icon="check-check" title={t("Koi mail approval ke liye nahi ruki", "No mails are waiting for approval")}
               text={s.approveEach
-                ? "Campaign chal raha ho to worker nayi drafts banata rahega; wo yahan aayengi."
-                : "Auto-approve on hai, isliye nayi drafts yahan nahi rukengi: wo seedhe sending window mein jaati hain."}>
-              {s.approveEach && <Link href="/campaigns" className="btn mt-4">Campaigns dekho<Icon name="arrow-right" size={14} /></Link>}
+                ? t("Campaign chal raha ho to worker nayi drafts banata rahega; wo yahan aayengi.", "While a campaign is running, the worker keeps writing new drafts; they will show up here.")
+                : t("Auto-approve on hai, isliye nayi drafts yahan nahi rukengi: wo seedhe sending window mein jaati hain.", "Auto-approve is on, so new drafts do not wait here: they go straight to the sending window.")}>
+              {s.approveEach && <Link href="/campaigns" className="btn mt-4">{t("Campaigns dekho", "See campaigns")}<Icon name="arrow-right" size={14} /></Link>}
             </EmptyState>
           </div>
-          <NextStep text="Ab tak kaunsi mail kab aur kisko gayi, wo Sent page pe dekho. Nayi drafts chahiye to Campaigns mein campaign chalao." href={sentHref} cta="Bheji gayi mails dekho" />
+          <NextStep
+            text={t(
+              "Ab tak kaunsi mail kab aur kisko gayi, wo Sent page pe dekho. Nayi drafts chahiye to Campaigns mein campaign chalao.",
+              "See on the Sent page which mails went out so far, when and to whom. Need new drafts? Run a campaign in Campaigns.",
+            )}
+            href={sentHref} cta={t("Bheji gayi mails dekho", "See sent mails")} />
         </>
       )}
     </div>

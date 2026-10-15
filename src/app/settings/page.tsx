@@ -5,6 +5,8 @@ import { capFor } from "@/lib/schedule";
 import { signature } from "@/lib/compose";
 import { footer } from "@/lib/lang";
 import { fmt } from "@/lib/time";
+import type { T } from "@/lib/i18n";
+import { getT } from "@/lib/i18n-server";
 import { saveSettingsAction, testSmtpAction, testImapAction, testMailAction, testAiAction, dnsAction, syncNowAction } from "../actions";
 import { ActionButton } from "@/components/ActionButton";
 import { ActionForm, SubmitButton } from "@/components/ActionForm";
@@ -13,10 +15,13 @@ import { Icon, type IconName } from "@/components/icons";
 import { ToastOnMount } from "@/components/toast";
 import { Badge, Callout, Field, NextStep, PageHeader, Section } from "@/components/ui";
 
+// "Settings" reads the same in Hinglish and English
 export const metadata = { title: "Settings" };
 
-const DAYS = ["Som", "Mangal", "Budh", "Guru", "Shukra", "Shani", "Ravi"]; // checkbox value 1..7 = Mon..Sun
+// [Hinglish, English]; checkbox value 1..7 = Mon..Sun
+const DAYS: [string, string][] = [["Som", "Mon"], ["Mangal", "Tue"], ["Budh", "Wed"], ["Guru", "Thu"], ["Shukra", "Fri"], ["Shani", "Sat"], ["Ravi", "Sun"]];
 const AI_URLS = ["https://api.openai.com/v1", "https://api.groq.com/openai/v1", "https://openrouter.ai/api/v1"];
+// [section id, label]: the labels read the same in both languages
 const JUMP: [string, string][] = [["check", "Test"], ["mailbox", "Mailbox"], ["profile", "Profile"], ["offer", "Offer"], ["rules", "Rules"], ["ai", "AI"], ["dns", "DNS"]];
 const TEST_BTN = "btn h-auto min-h-9 w-full justify-start whitespace-normal py-2 text-left leading-tight";
 const SUBHEAD = "mb-3 flex items-center gap-1.5 text-2xs font-bold uppercase tracking-wider text-slate-400";
@@ -31,12 +36,14 @@ function Txt({ name, value, plain = false, warn = false, mode, placeholder }: { 
 function Num({ name, value }: { name: string; value: number }) {
   return <input name={name} type="number" inputMode="numeric" defaultValue={value} className="input tabular-nums" />;
 }
-/** Hint with a "zaroori" marker while a required field is still empty. */
-function req(value: string, hint: string): ReactNode {
-  return value ? hint : <><span className="font-semibold text-amber-600">Zaroori, abhi khaali hai.</span> {hint}</>;
+/** Hint with a "required" marker while a required field is still empty. */
+function req(t: T, value: string, hint: string): ReactNode {
+  return value ? hint : <><span className="font-semibold text-amber-600">{t("Zaroori, abhi khaali hai.", "Required, still empty.")}</span> {hint}</>;
 }
-/** "A", "A aur B", "A, B aur C" */
-const andList = (xs: readonly string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join(", ")} aur ${xs[xs.length - 1]}` : xs[0] || "");
+/** "A", "A aur B" / "A and B", "A, B aur C" / "A, B and C" */
+const andList = (t: T, xs: readonly string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join(", ")} ${t("aur", "and")} ${xs[xs.length - 1]}` : xs[0] || "");
+/** English pronoun for n items ("Add it" / "Add them"); the Hinglish texts need none. */
+const itThem = (n: number) => (n > 1 ? "them" : "it");
 
 /**
  * On/off row. The whole row is one label (an overlay under the text) that toggles the real checkbox (same name);
@@ -74,8 +81,8 @@ function Group({ title, info, hint, icon, children }: { title: string; info: str
   );
 }
 
-/** "SPF  [theek hai]" style pair. soft = optional item, shown amber instead of red when missing. */
-function Check({ name, ok, okText = "theek hai", soft = false, mono = false }: { name: string; ok: boolean; okText?: string; soft?: boolean; mono?: boolean }) {
+/** "SPF  [theek hai / OK]" style pair. soft = optional item, shown amber instead of red when missing. */
+function Check({ name, ok, okText, soft = false, mono = false }: { name: string; ok: boolean; okText: string; soft?: boolean; mono?: boolean }) {
   return (
     <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
       <span className={mono ? "font-mono text-2xs text-slate-600" : "text-xs font-medium text-slate-600"}>{name}</span>
@@ -104,41 +111,52 @@ function rampOf(s: Settings) {
 }
 
 export default async function SettingsPage() {
+  const { t } = await getT();
   const s = await getSettings();
   const st = await getState();
   const envOk = { smtp: !!process.env.SMTP_PASSWORD, ai: !!process.env.AI_API_KEY };
   const envMissing = [!envOk.smtp && "SMTP_PASSWORD", !envOk.ai && "AI_API_KEY"].filter((k): k is string => !!k);
-  const missing = ([[s.fromEmail, "From address"], [s.testEmail, "Test address"], [s.senderName, "Naam"], [s.postalAddress, "Postal address"]] as const)
-    .filter(([v]) => !v).map(([, label]) => label);
+  // required fields that are still empty, as [field, label]: the toast's once-key uses the field names, so a language switch does not show it again
+  const empty = ([["fromEmail", "From address"], ["testEmail", "Test address"], ["senderName", t("Naam", "Name")], ["postalAddress", "Postal address"]] as const)
+    .filter(([k]) => !s[k]);
+  const missing = empty.map(([, label]) => label);
+  const missingList = andList(t, missing);
   // From and Test address are in the Mailbox card; Naam and Postal address are in Sender profile
-  const fix = !s.fromEmail || !s.testEmail ? { href: "#mailbox", cta: "Mailbox bharo" } : { href: "#profile", cta: "Profile bharo" };
+  const fix = !s.fromEmail || !s.testEmail ? { href: "#mailbox", cta: t("Mailbox bharo", "Fill in mailbox") } : { href: "#profile", cta: t("Profile bharo", "Fill in profile") };
   // notify() sends to Alert address, else Test address: with both empty, auto-pause, reply and daily report mails go nowhere
   const noAlertTo = !s.alertEmail && !s.testEmail;
   const dns = st.dns;
   const dnsBad = !!dns && (!dns.spf || !dns.dkim);
+  // the required records the last DNS check did not find (shown only when dnsBad)
+  const dnsFix = [!dns?.spf && "SPF", !dns?.dkim && "DKIM"].filter(Boolean).join(t(" aur ", " and "));
   const ready = !missing.length && !!dns && !dnsBad;
   const planCap = Math.floor(s.planDailyLimit * 0.4);
   const ramp = rampOf(s);
   const sig = signature(s);
+  const okText = t("theek hai", "OK");
+  const setText = t("set hai", "set");
 
   const next: { text: ReactNode; href: string; cta: string; tone: "indigo" | "emerald" | "amber" } = missing.length
-    ? { text: <>Neeche <b>{andList(missing)}</b> bharo, phir <b>Settings save karo</b> dabao.</>, ...fix, tone: "indigo" }
+    ? { text: t(<>Neeche <b>{missingList}</b> bharo, phir <b>Settings save karo</b> dabao.</>, <>Fill in <b>{missingList}</b> below, then click <b>Save settings</b>.</>), ...fix, tone: "indigo" }
     : !dns
-      ? { text: <>Save ke baad <b>Test mail mujhe bhejo</b> aur <b>DNS check karo</b> dabao.</>, href: "#check", cta: "Test karo", tone: "indigo" }
+      ? { text: t(<>Save ke baad <b>Test mail mujhe bhejo</b> aur <b>DNS check karo</b> dabao.</>, <>After saving, click <b>Send test mail to me</b> and <b>Check DNS</b>.</>), href: "#check", cta: t("Test karo", "Run tests"), tone: "indigo" }
       : dnsBad
-        ? { text: <>Hostinger DNS mein {[!dns.spf && "SPF", !dns.dkim && "DKIM"].filter(Boolean).join(" aur ")} theek karo, phir <b>DNS check karo</b> dobara dabao.</>, href: "#dns", cta: "DNS detail dekho", tone: "amber" }
+        ? { text: t(<>Hostinger DNS mein {dnsFix} theek karo, phir <b>DNS check karo</b> dobara dabao.</>, <>Fix {dnsFix} in Hostinger DNS, then click <b>Check DNS</b> again.</>), href: "#dns", cta: t("DNS detail dekho", "See DNS details"), tone: "amber" }
         // the Dashboard knows the real next step (ledger, import, campaign, approvals...); Settings does not
-        : { text: <>Settings theek hain. Aage kya karna hai, wo Dashboard ka <b>Aapka agla step</b> batayega.</>, href: "/", cta: "Dashboard kholo", tone: "emerald" };
+        : { text: t(<>Settings theek hain. Aage kya karna hai, wo Dashboard ka <b>Aapka agla step</b> batayega.</>, <>Settings look good. <b>Your next step</b> on the Dashboard tells you what to do next.</>), href: "/", cta: t("Dashboard kholo", "Open dashboard"), tone: "emerald" };
 
   return (
     <div>
       <PageHeader
         title="Settings"
-        info={"Pehli baar setup:\n1. Neeche Mailbox aur Sender profile bharo.\n2. Neeche wali bar mein 'Settings save karo' dabao.\n3. Phir 'Test mail mujhe bhejo' aur 'DNS check karo' dabao.\nPasswords yahan nahi daalte, wo server ki .env file mein rehte hain."}
-        sub="Mailbox, signature, sending rules, AI aur DNS: sab yahin set hota hai."
+        info={t(
+          "Pehli baar setup:\n1. Neeche Mailbox aur Sender profile bharo.\n2. Neeche wali bar mein 'Settings save karo' dabao.\n3. Phir 'Test mail mujhe bhejo' aur 'DNS check karo' dabao.\nPasswords yahan nahi daalte, wo server ki .env file mein rehte hain.",
+          "First-time setup:\n1. Fill in Mailbox and Sender profile below.\n2. Click 'Save settings' in the bar at the bottom.\n3. Then click 'Send test mail to me' and 'Check DNS'.\nPasswords are not entered here; they live in the server's .env file.",
+        )}
+        sub={t("Mailbox, signature, sending rules, AI aur DNS: sab yahin set hota hai.", "Mailbox, signature, sending rules, AI and DNS: all set up here.")}
         actions={
           // phones: a 4-column grid, so every part (DNS too) is visible without sideways scrolling
-          <nav aria-label="Settings ke hisse" className="seg scrollbar-none max-sm:grid max-sm:w-full max-sm:grid-cols-4">
+          <nav aria-label={t("Settings ke hisse", "Settings sections")} className="seg scrollbar-none max-sm:grid max-sm:w-full max-sm:grid-cols-4">
             {JUMP.map(([id, label]) => <a key={id} href={`#${id}`} className="seg-item justify-center">{label}</a>)}
           </nav>
         }
@@ -149,219 +167,336 @@ export default async function SettingsPage() {
 
         {envMissing.length > 0 && (
           <>
-            <Callout tone="danger" title={`Server ki .env mein ${envMissing.join(" aur ")} nahi hai`}>
-              {!envOk.smtp && "SMTP_PASSWORD ke bina koi mail nahi jaati. "}
-              {!envOk.ai && "AI_API_KEY ke bina AI drafts nahi likhta. "}
-              Server pe .env mein daalo, phir <code className={CODE}>pm2 restart outreach-web outreach-worker</code> chalao.
+            <Callout tone="danger" title={t(`Server ki .env mein ${envMissing.join(" aur ")} nahi hai`, `The server's .env is missing ${envMissing.join(" and ")}`)}>
+              {!envOk.smtp && t("SMTP_PASSWORD ke bina koi mail nahi jaati. ", "Without SMTP_PASSWORD no mail goes out. ")}
+              {!envOk.ai && t("AI_API_KEY ke bina AI drafts nahi likhta. ", "Without AI_API_KEY the AI cannot write drafts. ")}
+              {t(
+                <>Server pe .env mein daalo, phir <code className={CODE}>pm2 restart outreach-web outreach-worker</code> chalao.</>,
+                <>Add {itThem(envMissing.length)} to .env on the server, then run <code className={CODE}>pm2 restart outreach-web outreach-worker</code>.</>,
+              )}
             </Callout>
-            <ToastOnMount kind="error" title={`.env mein ${envMissing.join(" aur ")} missing hai`} text="Inke bina mail ya AI kaam nahi karega. Server ki .env file mein daalo." once={`settings:env:${envMissing.join(",")}`} />
+            <ToastOnMount kind="error" title={t(`.env mein ${envMissing.join(" aur ")} missing hai`, `.env is missing ${envMissing.join(" and ")}`)}
+              text={t("Inke bina mail ya AI kaam nahi karega. Server ki .env file mein daalo.", `Mail or AI will not work without ${itThem(envMissing.length)}. Add ${itThem(envMissing.length)} to the server's .env file.`)}
+              once={`settings:env:${envMissing.join(",")}`} />
           </>
         )}
 
         {missing.length > 0 && (
           <>
-            <Callout tone="warn" title="Kuch zaroori settings khaali hain">
-              <b>{andList(missing)}</b> bharo aur save karo. Inke bina mail sahi se nahi jaa sakti.
-              {noAlertTo && <> Alert aur Test address dono khaali hain, isliye <b>auto-pause, reply aur daily report</b> ki mail abhi aap tak nahi pahunchti.</>}
+            <Callout tone="warn" title={t("Kuch zaroori settings khaali hain", "Some required settings are empty")}>
+              {t(
+                <><b>{missingList}</b> bharo aur save karo. Inke bina mail sahi se nahi jaa sakti.</>,
+                <>Fill in <b>{missingList}</b> and save. Without {itThem(missing.length)}, mail cannot go out properly.</>,
+              )}
+              {noAlertTo && t(
+                <> Alert aur Test address dono khaali hain, isliye <b>auto-pause, reply aur daily report</b> ki mail abhi aap tak nahi pahunchti.</>,
+                <> Alert and Test address are both empty, so <b>auto-pause, reply and daily report</b> mails do not reach you right now.</>,
+              )}
             </Callout>
-            <ToastOnMount kind="warning" title="Kuch zaroori settings khaali hain"
-              text={`${andList(missing)} bharo aur save karo.${noAlertTo ? " Tab tak auto-pause, reply aur daily report ki mail aap tak nahi pahunchegi." : ""}`}
-              href={fix.href} cta={fix.cta} once={`settings:missing:${missing.join(",")}`} />
+            <ToastOnMount kind="warning" title={t("Kuch zaroori settings khaali hain", "Some required settings are empty")}
+              text={t(
+                `${missingList} bharo aur save karo.${noAlertTo ? " Tab tak auto-pause, reply aur daily report ki mail aap tak nahi pahunchegi." : ""}`,
+                `Fill in ${missingList} and save.${noAlertTo ? " Until then, auto-pause, reply and daily report mails will not reach you." : ""}`,
+              )}
+              href={fix.href} cta={fix.cta} once={`settings:missing:${empty.map(([k]) => k).join(",")}`} />
           </>
         )}
 
         {/* ---------- tests and status (outside the form: these buttons never submit it, and the Mode link is not among unsaved fields) ---------- */}
         <Section id="check" className="scroll-mt-20" icon="zap" title="Connection test"
-          info={"Ye buttons check karte hain ki sab sahi se juda hai:\n• SMTP test: mail bhejne ka login\n• IMAP test: inbox padhne ka login\n• Test mail: ek asli sample mail aapke test address pe\n• AI test: AI key aur model\n• DNS check: SPF, DKIM, DMARC records\n• Inbox sync: replies abhi laao\nSettings badli hain to pehle save karo, phir test karo.\nTest fail ho to: SMTP/IMAP mein host, port, SSL switch aur .env ka password dekho. AI mein Base URL, Model aur AI_API_KEY dekho."}
-          sub="Save ke baad yahan test karo. Har test ka result screen pe chhote popup mein dikhega.">
+          info={t(
+            "Ye buttons check karte hain ki sab sahi se juda hai:\n• SMTP test: mail bhejne ka login\n• IMAP test: inbox padhne ka login\n• Test mail: ek asli sample mail aapke test address pe\n• AI test: AI key aur model\n• DNS check: SPF, DKIM, DMARC records\n• Inbox sync: replies abhi laao\nSettings badli hain to pehle save karo, phir test karo.\nTest fail ho to: SMTP/IMAP mein host, port, SSL switch aur .env ka password dekho. AI mein Base URL, Model aur AI_API_KEY dekho.",
+            "These buttons check that everything is connected properly:\n• SMTP test: the login for sending mail\n• IMAP test: the login for reading the inbox\n• Test mail: a real sample mail to your test address\n• AI test: the AI key and model\n• DNS check: SPF, DKIM, DMARC records\n• Inbox sync: fetch replies now\nIf you changed settings, save first, then test.\nIf a test fails: for SMTP/IMAP check the host, port, SSL switch and the password in .env. For AI check Base URL, Model and AI_API_KEY.",
+          )}
+          sub={t("Save ke baad yahan test karo. Har test ka result screen pe chhote popup mein dikhega.", "After saving, test here. Each test's result shows in a small popup on screen.")}>
           <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">
-            <ActionButton action={testSmtpAction} label="SMTP test" icon="server" pendingText="SMTP check ho raha hai…" errTitle="SMTP test fail hua" className={TEST_BTN} />
-            <ActionButton action={testImapAction} label="IMAP test" icon="inbox" pendingText="IMAP check ho raha hai…" errTitle="IMAP test fail hua" className={TEST_BTN} />
-            <ActionButton action={testMailAction} label="Test mail mujhe bhejo" icon="mail" pendingText="Test mail ja rahi hai…" errTitle="Test mail nahi gayi" className={TEST_BTN} />
-            <ActionButton action={testAiAction} label="AI test" icon="bot" pendingText="AI check ho raha hai…" errTitle="AI test fail hua" className={TEST_BTN} />
-            <ActionButton action={dnsAction} label="DNS check karo" icon="shield" pendingText="DNS check ho raha hai…" errTitle="DNS check mein problem" className={TEST_BTN}
-              next={!dns ? "/ledger" : dnsBad ? "/campaigns" : undefined} nextCta={!dns ? "Aage: Ledger kholo" : "Campaigns kholo"} />
-            <ActionButton action={syncNowAction} label="Inbox abhi sync karo" icon="refresh" pendingText="Inbox sync ho raha hai…" errTitle="Inbox sync fail hua" className={TEST_BTN} next="/replies" nextCta="Replies dekho" />
+            <ActionButton action={testSmtpAction} label="SMTP test" icon="server" pendingText={t("SMTP check ho raha hai…", "Checking SMTP…")} errTitle={t("SMTP test fail hua", "SMTP test failed")} className={TEST_BTN} />
+            <ActionButton action={testImapAction} label="IMAP test" icon="inbox" pendingText={t("IMAP check ho raha hai…", "Checking IMAP…")} errTitle={t("IMAP test fail hua", "IMAP test failed")} className={TEST_BTN} />
+            <ActionButton action={testMailAction} label={t("Test mail mujhe bhejo", "Send test mail to\u00a0me")} icon="mail" pendingText={t("Test mail ja rahi hai…", "Sending test mail…")} errTitle={t("Test mail nahi gayi", "Test mail not sent")} className={TEST_BTN} />
+            <ActionButton action={testAiAction} label="AI test" icon="bot" pendingText={t("AI check ho raha hai…", "Checking AI…")} errTitle={t("AI test fail hua", "AI test failed")} className={TEST_BTN} />
+            <ActionButton action={dnsAction} label={t("DNS check karo", "Check DNS")} icon="shield" pendingText={t("DNS check ho raha hai…", "Checking DNS…")} errTitle={t("DNS check mein problem", "DNS check found a problem")} className={TEST_BTN}
+              next={!dns ? "/ledger" : dnsBad ? "/campaigns" : undefined} nextCta={!dns ? t("Aage: Ledger kholo", "Next: open ledger") : t("Campaigns kholo", "Open campaigns")} />
+            <ActionButton action={syncNowAction} label={t("Inbox abhi sync karo", "Sync inbox now")} icon="refresh" pendingText={t("Inbox sync ho raha hai…", "Syncing inbox…")} errTitle={t("Inbox sync fail hua", "Inbox sync failed")} className={TEST_BTN} next="/replies" nextCta={t("Replies dekho", "See replies")} />
           </div>
           <dl className="mt-4 divide-y divide-slate-200/70 rounded-lg border border-slate-200/80 bg-slate-50/60">
-            <StatusRow label="Mode" info="DRY-RUN = har mail sirf aapke test address pe jaati hai, asli lead ko nahi. LIVE = mails asli leads ko jaati hain. Mode sirf Dashboard ke switch se badalta hai, Settings save karne se nahi.">
+            <StatusRow label="Mode" info={t(
+              "DRY-RUN = har mail sirf aapke test address pe jaati hai, asli lead ko nahi. LIVE = mails asli leads ko jaati hain. Mode sirf Dashboard ke switch se badalta hai, Settings save karne se nahi.",
+              "DRY-RUN = every mail goes only to your test address, never to the real lead. LIVE = mails go to real leads. The mode only changes with the Dashboard switch, not by saving settings.",
+            )}>
               <Badge v={s.dryRun ? "dry-run" : "live"} label={s.dryRun ? "DRY-RUN" : "LIVE"} />
-              <span className="text-xs text-slate-600">{s.dryRun ? "Mails sirf aapke test address pe jaati hain" : "Mails asli leads ko jaa rahi hain"}</span>
-              <Link href="/#mode" className="link inline-flex items-center gap-0.5 text-xs">Dashboard pe badlo<Icon name="arrow-right" size={12} /></Link>
+              <span className="text-xs text-slate-600">{s.dryRun ? t("Mails sirf aapke test address pe jaati hain", "Mails only go to your test address") : t("Mails asli leads ko jaa rahi hain", "Mails go to real leads")}</span>
+              <Link href="/#mode" className="link inline-flex items-center gap-0.5 text-xs">{t("Dashboard pe badlo", "Change on dashboard")}<Icon name="arrow-right" size={12} /></Link>
             </StatusRow>
-            <StatusRow label="Server .env" info="Passwords aur API key server ki .env file mein rehte hain, yahan kabhi nahi dikhte. 'missing' ho to server pe .env mein daalo aur pm2 restart karo.">
-              <Check name="SMTP_PASSWORD" ok={envOk.smtp} okText="set hai" mono />
-              <Check name="AI_API_KEY" ok={envOk.ai} okText="set hai" mono />
+            <StatusRow label="Server .env" info={t(
+              "Passwords aur API key server ki .env file mein rehte hain, yahan kabhi nahi dikhte. 'missing' ho to server pe .env mein daalo aur pm2 restart karo.",
+              "Passwords and the API key live in the server's .env file and are never shown here. If one is 'missing', add it to .env on the server and run pm2 restart.",
+            )}>
+              <Check name="SMTP_PASSWORD" ok={envOk.smtp} okText={setText} mono />
+              <Check name="AI_API_KEY" ok={envOk.ai} okText={setText} mono />
             </StatusRow>
-            <StatusRow label="DNS" info="Pichhle DNS check ka result. SPF aur DKIM zaroori hain: inke bina campaign start nahi hota. DMARC optional hai, par inbox tak pahunchne mein madad karta hai.">
+            <StatusRow label="DNS" info={t(
+              "Pichhle DNS check ka result. SPF aur DKIM zaroori hain: inke bina campaign start nahi hota. DMARC optional hai, par inbox tak pahunchne mein madad karta hai.",
+              "Result of the last DNS check. SPF and DKIM are required: without them a campaign cannot start. DMARC is optional, but it helps mails reach the inbox.",
+            )}>
               {dns ? (
                 <>
-                  <Check name="SPF" ok={dns.spf} />
-                  <Check name="DKIM" ok={dns.dkim} />
-                  <Check name="DMARC" ok={dns.dmarc} soft />
-                  <span className="text-2xs text-slate-400">Pichhla check: {fmt(dns.at)}</span>
+                  <Check name="SPF" ok={dns.spf} okText={okText} />
+                  <Check name="DKIM" ok={dns.dkim} okText={okText} />
+                  <Check name="DMARC" ok={dns.dmarc} okText={okText} soft />
+                  <span className="text-2xs text-slate-400">{t("Pichhla check", "Last check")}: {fmt(dns.at)}</span>
                 </>
-              ) : <span className="text-xs text-slate-500">Abhi check nahi hua. <b className="font-medium text-slate-700">DNS check karo</b> dabao.</span>}
+              ) : <span className="text-xs text-slate-500">{t(
+                <>Abhi check nahi hua. <b className="font-medium text-slate-700">DNS check karo</b> dabao.</>,
+                <>Not checked yet. Click <b className="font-medium text-slate-700">Check DNS</b>.</>,
+              )}</span>}
             </StatusRow>
-            <StatusRow label="Inbox sync" info="Worker har 10 minute mein inbox apne aap sync karta hai (replies, bounce, opt-out). Abhi chahiye to 'Inbox abhi sync karo' dabao.">
-              <span className="text-xs text-slate-600">{st.lastSyncAt ? <>Pichhla sync: {fmt(st.lastSyncAt)}</> : "Abhi tak sync nahi hua"}</span>
+            <StatusRow label="Inbox sync" info={t(
+              "Worker har 10 minute mein inbox apne aap sync karta hai (replies, bounce, opt-out). Abhi chahiye to 'Inbox abhi sync karo' dabao.",
+              "The worker syncs the inbox by itself every 10 minutes (replies, bounces, opt-outs). Need it now? Click 'Sync inbox now'.",
+            )}>
+              <span className="text-xs text-slate-600">{st.lastSyncAt ? <>{t("Pichhla sync", "Last sync")}: {fmt(st.lastSyncAt)}</> : t("Abhi tak sync nahi hua", "Not synced yet")}</span>
             </StatusRow>
           </dl>
         </Section>
 
         {/* ---------- every setting is in this one form ---------- */}
-        <ActionForm action={saveSettingsAction} ok="Settings save ho gayi" next={ready ? "/" : "#check"} nextCta={ready ? "Dashboard pe jao" : "Ab connection test karo"} className="space-y-4">
+        <ActionForm action={saveSettingsAction} ok={t("Settings save ho gayi", "Settings saved")} next={ready ? "/" : "#check"}
+          nextCta={ready ? t("Dashboard pe jao", "Go to dashboard") : t("Ab connection test karo", "Now test the connection")} className="space-y-4">
           <div className="grid gap-4 lg:grid-cols-2">
             <Section id="mailbox" className="scroll-mt-20 lg:col-span-2" icon="mail" title="Mailbox (SMTP / IMAP)"
-              info="Aapka email account: SMTP se mails jaati hain, IMAP se inbox padha jaata hai (replies, bounce, opt-out). Hostinger ke host aur port pehle se bhare hain, aam taur pe sirf apna email daalna hota hai."
-              sub="Mail bhejne aur inbox padhne wala account">
+              info={t(
+                "Aapka email account: SMTP se mails jaati hain, IMAP se inbox padha jaata hai (replies, bounce, opt-out). Hostinger ke host aur port pehle se bhare hain, aam taur pe sirf apna email daalna hota hai.",
+                "Your email account: mails go out over SMTP and the inbox is read over IMAP (replies, bounces, opt-outs). Hostinger's hosts and ports are already filled in; usually you only need to enter your email.",
+              )}
+              sub={t("Mail bhejne aur inbox padhne wala account", "The account that sends mail and reads the inbox")}>
               <div className="grid gap-x-8 gap-y-6 md:grid-cols-2">
                 <div className="min-w-0">
-                  <h3 className={SUBHEAD}><Icon name="send" size={12} />SMTP · mail bhejna</h3>
+                  <h3 className={SUBHEAD}><Icon name="send" size={12} />{t("SMTP · mail bhejna", "SMTP · sending mail")}</h3>
                   <div className="space-y-3">
                     <div className="grid grid-cols-[minmax(0,1fr)_96px] gap-3">
-                      <Field label="SMTP host" info="Mail bhejne wala server." hint="Hostinger: smtp.hostinger.com"><Txt name="smtpHost" value={s.smtpHost} plain /></Field>
-                      <Field label="Port" info="465 = SSL (neeche SSL switch on). 587 = STARTTLS (SSL switch off)."><Num name="smtpPort" value={s.smtpPort} /></Field>
+                      <Field label="SMTP host" info={t("Mail bhejne wala server.", "The server that sends mail.")} hint="Hostinger: smtp.hostinger.com"><Txt name="smtpHost" value={s.smtpHost} plain /></Field>
+                      <Field label="Port" info={t("465 = SSL (neeche SSL switch on). 587 = STARTTLS (SSL switch off).", "465 = SSL (SSL switch below on). 587 = STARTTLS (SSL switch off).")}><Num name="smtpPort" value={s.smtpPort} /></Field>
                     </div>
                     <Toggle name="smtpSecure" checked={s.smtpSecure} title="SSL/TLS" text="465 = SSL (on) · 587 = STARTTLS (off)"
-                      info="Port 465 ke saath on rakho. Port 587 (STARTTLS) ke saath off rakho, wahan connection baad mein encrypt hota hai." />
-                    <Field label="SMTP user" info="Mailbox ka login naam. Khaali chhodo to From address hi login ban jaata hai." hint="Aam taur pe aapka email"><Txt name="smtpUser" value={s.smtpUser} plain mode="email" /></Field>
+                      info={t(
+                        "Port 465 ke saath on rakho. Port 587 (STARTTLS) ke saath off rakho, wahan connection baad mein encrypt hota hai.",
+                        "Keep it on with port 465. Keep it off with port 587 (STARTTLS), where the connection is encrypted after it opens.",
+                      )} />
+                    <Field label="SMTP user" info={t("Mailbox ka login naam. Khaali chhodo to From address hi login ban jaata hai.", "The mailbox login name. Leave it empty and the From address is used as the login.")}
+                      hint={t("Aam taur pe aapka email", "Usually your email")}><Txt name="smtpUser" value={s.smtpUser} plain mode="email" /></Field>
                   </div>
                 </div>
                 <div className="min-w-0">
-                  <h3 className={SUBHEAD}><Icon name="inbox" size={12} />IMAP · inbox padhna</h3>
+                  <h3 className={SUBHEAD}><Icon name="inbox" size={12} />{t("IMAP · inbox padhna", "IMAP · reading the inbox")}</h3>
                   <div className="space-y-3">
                     <div className="grid grid-cols-[minmax(0,1fr)_96px] gap-3">
-                      <Field label="IMAP host" info="Inbox padhne wala server. Replies, bounce aur opt-out isi se pakde jaate hain." hint="Hostinger: imap.hostinger.com"><Txt name="imapHost" value={s.imapHost} plain /></Field>
-                      <Field label="Port" info="993 = SSL. Hostinger pe 993 hi rakho."><Num name="imapPort" value={s.imapPort} /></Field>
+                      <Field label="IMAP host" info={t("Inbox padhne wala server. Replies, bounce aur opt-out isi se pakde jaate hain.", "The server that reads the inbox. Replies, bounces and opt-outs are picked up through it.")}
+                        hint="Hostinger: imap.hostinger.com"><Txt name="imapHost" value={s.imapHost} plain /></Field>
+                      <Field label="Port" info={t("993 = SSL. Hostinger pe 993 hi rakho.", "993 = SSL. On Hostinger, keep 993.")}><Num name="imapPort" value={s.imapPort} /></Field>
                     </div>
-                    <Toggle name="imapSecure" checked={s.imapSecure} title="SSL/TLS" text="993 = SSL (on)" info="Inbox ka connection encrypted rehta hai. Port 993 ke saath on rakho." />
-                    <Field label="IMAP user" info="Inbox ka login. Aam taur pe SMTP wala hi hota hai, isliye khaali chhod sakte ho." hint="Khaali = SMTP user"><Txt name="imapUser" value={s.imapUser} plain mode="email" /></Field>
+                    <Toggle name="imapSecure" checked={s.imapSecure} title="SSL/TLS" text="993 = SSL (on)"
+                      info={t("Inbox ka connection encrypted rehta hai. Port 993 ke saath on rakho.", "Keeps the inbox connection encrypted. Keep it on with port 993.")} />
+                    <Field label="IMAP user" info={t("Inbox ka login. Aam taur pe SMTP wala hi hota hai, isliye khaali chhod sakte ho.", "The inbox login. It is usually the same as SMTP, so you can leave it empty.")}
+                      hint={t("Khaali = SMTP user", "Empty = SMTP user")}><Txt name="imapUser" value={s.imapUser} plain mode="email" /></Field>
                   </div>
                 </div>
               </div>
 
               <div className="mt-6 border-t border-slate-100 pt-5">
-                <h3 className={SUBHEAD}><Icon name="mail-check" size={12} />Email address</h3>
+                <h3 className={SUBHEAD}><Icon name="mail-check" size={12} />{t("Email address", "Email addresses")}</h3>
                 <div className="grid gap-3 md:grid-cols-3">
-                  <Field label="From address" info="Leads ko mail isi address se jaati hai. Ye aapke apne domain ka hona chahiye, DNS check isi domain ka hota hai." hint={req(s.fromEmail, "Mail isi address se jayegi")}>
+                  <Field label="From address" info={t(
+                    "Leads ko mail isi address se jaati hai. Ye aapke apne domain ka hona chahiye, DNS check isi domain ka hota hai.",
+                    "Mail to leads goes out from this address. It must be on your own domain; the DNS check runs on this domain.",
+                  )} hint={req(t, s.fromEmail, t("Mail isi address se jayegi", "Mail will go out from this address"))}>
                     <Txt name="fromEmail" value={s.fromEmail} plain mode="email" warn={!s.fromEmail} />
                   </Field>
-                  <Field label="Test address" info="Aapka apna personal email. DRY-RUN mode mein har mail sirf yahan aati hai, aur 'Test mail mujhe bhejo' bhi yahin aati hai." hint={req(s.testEmail, "Dry-run aur test mails isi pe aati hain")}>
+                  <Field label="Test address" info={t(
+                    "Aapka apna personal email. DRY-RUN mode mein har mail sirf yahan aati hai, aur 'Test mail mujhe bhejo' bhi yahin aati hai.",
+                    "Your own personal email. In DRY-RUN mode every mail comes only here, and 'Send test mail to me' also sends here.",
+                  )} hint={req(t, s.testEmail, t("Dry-run aur test mails isi pe aati hain", "Dry-run and test mails come here"))}>
                     <Txt name="testEmail" value={s.testEmail} plain mode="email" warn={!s.testEmail} />
                   </Field>
-                  <Field label="Alert address" info="Sending apne aap ruk jaaye (auto-pause), kisi lead ka reply aaye, ya daily report bane: notification is address pe aata hai. Khaali = Test address. Dono khaali hon to ye mails kahin nahi jaati."
+                  <Field label="Alert address" info={t(
+                    "Sending apne aap ruk jaaye (auto-pause), kisi lead ka reply aaye, ya daily report bane: notification is address pe aata hai. Khaali = Test address. Dono khaali hon to ye mails kahin nahi jaati.",
+                    "When sending pauses by itself (auto-pause), a lead replies or the daily report is made, the notification goes to this address. Empty = Test address. If both are empty, these mails go nowhere.",
+                  )}
                     hint={noAlertTo
-                      ? <><span className="font-semibold text-amber-600">Abhi auto-pause, reply aur daily report ki mail kahin nahi jaati.</span> Alert ya Test address bharo.</>
-                      : "Auto-pause, replies aur daily report yahan aate hain"}>
+                      ? t(
+                        <><span className="font-semibold text-amber-600">Abhi auto-pause, reply aur daily report ki mail kahin nahi jaati.</span> Alert ya Test address bharo.</>,
+                        <><span className="font-semibold text-amber-600">Auto-pause, reply and daily report mails go nowhere right now.</span> Fill in Alert or Test address.</>,
+                      )
+                      : t("Auto-pause, replies aur daily report yahan aate hain", "Auto-pause, replies and daily report come here")}>
                     <Txt name="alertEmail" value={s.alertEmail} plain mode="email" warn={noAlertTo} />
                   </Field>
                 </div>
               </div>
               <p className="mt-5 flex items-start gap-2 rounded-lg bg-slate-50 px-3 py-2.5 text-xs text-slate-500">
                 <Icon name="lock" size={13} className="mt-px text-slate-400" />
-                <span>Passwords sirf server ki .env file se aate hain (<code className={CODE}>SMTP_PASSWORD</code>, <code className={CODE}>IMAP_PASSWORD</code>, <code className={CODE}>AI_API_KEY</code>). Yahan password nahi daalna.</span>
+                <span>{t(
+                  <>Passwords sirf server ki .env file se aate hain (<code className={CODE}>SMTP_PASSWORD</code>, <code className={CODE}>IMAP_PASSWORD</code>, <code className={CODE}>AI_API_KEY</code>). Yahan password nahi daalna.</>,
+                  <>Passwords come only from the server&apos;s .env file (<code className={CODE}>SMTP_PASSWORD</code>, <code className={CODE}>IMAP_PASSWORD</code>, <code className={CODE}>AI_API_KEY</code>). Do not enter passwords here.</>,
+                )}</span>
               </p>
             </Section>
 
             <Section id="profile" className="scroll-mt-20" icon="user" title="Sender profile (signature)"
-              info="Har mail ke neeche signature aur footer app khud lagata hai, AI nahi. Yahan wahi bharo jo leads ko dikhna chahiye. Neeche preview mein dekho mail ke end mein kya jaata hai."
-              sub="Har mail ke neeche yahi signature lagta hai">
+              info={t(
+                "Har mail ke neeche signature aur footer app khud lagata hai, AI nahi. Yahan wahi bharo jo leads ko dikhna chahiye. Neeche preview mein dekho mail ke end mein kya jaata hai.",
+                "The app adds the signature and footer under every mail itself, not the AI. Fill in what leads should see. The preview below shows what goes at the end of each mail.",
+              )}
+              sub={t("Har mail ke neeche yahi signature lagta hai", "This signature goes under every mail")}>
               <div className="space-y-4">
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label="Naam" info="Signature ki pehli line. Inbox mein 'From' ke saath bhi yahi naam dikhta hai." hint={req(s.senderName, "From ke saath dikhta hai")}>
+                  <Field label={t("Naam", "Name")} info={t("Signature ki pehli line. Inbox mein 'From' ke saath bhi yahi naam dikhta hai.", "The first line of the signature. The inbox also shows this name next to 'From'.")}
+                    hint={req(t, s.senderName, t("From ke saath dikhta hai", "Shown next to From"))}>
                     <Txt name="senderName" value={s.senderName} warn={!s.senderName} />
                   </Field>
-                  <Field label="Role" info="Signature mein naam ke neeche dikhta hai." hint="Jaise: Web designer"><Txt name="senderRole" value={s.senderRole} /></Field>
-                  <Field label="Business" info="Role ke saath dikhta hai. Khaali ho to AI aapko freelancer maan ke likhta hai." hint="Khaali = freelance"><Txt name="business" value={s.business} /></Field>
-                  <Field label="Website" info="Signature mein aapki website ka link." hint="Jaise: https://aapki-site.com"><Txt name="website" value={s.website} plain mode="url" /></Field>
+                  <Field label="Role" info={t("Signature mein naam ke neeche dikhta hai.", "Shown under the name in the signature.")} hint={t("Jaise: Web designer", "e.g. Web designer")}><Txt name="senderRole" value={s.senderRole} /></Field>
+                  <Field label="Business" info={t("Role ke saath dikhta hai. Khaali ho to AI aapko freelancer maan ke likhta hai.", "Shown next to the role. If empty, the AI writes as if you are a freelancer.")}
+                    hint={t("Khaali = freelance", "Empty = freelance")}><Txt name="business" value={s.business} /></Field>
+                  <Field label="Website" info={t("Signature mein aapki website ka link.", "A link to your website in the signature.")} hint={t("Jaise: https://aapki-site.com", "e.g. https://your-site.com")}><Txt name="website" value={s.website} plain mode="url" /></Field>
                 </div>
-                <Field label="Portfolio links" info="Signature mein website ke neeche dikhte hain. Ek line mein ek link." hint="Ek line mein ek link">
+                <Field label="Portfolio links" info={t("Signature mein website ke neeche dikhte hain. Ek line mein ek link.", "Shown under the website in the signature. One link per line.")} hint={t("Ek line mein ek link", "One link per line")}>
                   <textarea name="portfolio" defaultValue={s.portfolio} rows={3} className="input" {...PLAIN} />
                 </Field>
-                <Field label="Postal address" info="Har mail ke footer mein dikhta hai. Cold email ke law (jaise CAN-SPAM) ke hisaab se ye zaroori hai." hint={req(s.postalAddress, "Footer mein dikhta hai (law ke hisaab se zaroori)")}>
+                <Field label="Postal address" info={t(
+                  "Har mail ke footer mein dikhta hai. Cold email ke law (jaise CAN-SPAM) ke hisaab se ye zaroori hai.",
+                  "Shown in the footer of every mail. Cold email laws (like CAN-SPAM) require it.",
+                )} hint={req(t, s.postalAddress, t("Footer mein dikhta hai (law ke hisaab se zaroori)", "Shown in the footer (required by law)"))}>
                   <textarea name="postalAddress" defaultValue={s.postalAddress} rows={2} className={`input ${!s.postalAddress ? WARN_INPUT : ""}`} />
                 </Field>
-                <Toggle name="signatureLogo" checked={s.signatureLogo} title="Signature mein logo" text="Off = sirf plain text, naye domain ke liye sabse safe"
-                  info="On karne pe mail HTML mein jaati hai aur signature ke neeche chhota logo dikhta hai. Logo mail ke andar hi hota hai, bahar se load nahi hota. Naye domain ke warm-up mein off rakhna sabse safe hai." />
+                <Toggle name="signatureLogo" checked={s.signatureLogo} title={t("Signature mein logo", "Logo in signature")}
+                  text={t("Off = sirf plain text, naye domain ke liye sabse safe", "Off = plain text only, safest for a new domain")}
+                  info={t(
+                    "On karne pe mail HTML mein jaati hai aur signature ke neeche chhota logo dikhta hai. Logo mail ke andar hi hota hai, bahar se load nahi hota. Naye domain ke warm-up mein off rakhna sabse safe hai.",
+                    "When on, mail goes out as HTML with a small logo under the signature. The logo is embedded in the mail itself, not loaded from outside. Keeping it off while a new domain warms up is the safest.",
+                  )} />
                 <details className="group rounded-lg border border-slate-200">
                   <summary className="flex cursor-pointer select-none items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-slate-600 transition hover:text-slate-900">
-                    <Icon name="eye" size={14} className="text-slate-400" />Signature preview dekho
+                    <Icon name="eye" size={14} className="text-slate-400" />{t("Signature preview dekho", "Show signature preview")}
                     <Icon name="chevron-down" size={14} className="ml-auto text-slate-400 transition group-open:rotate-180" />
                   </summary>
                   <div className="border-t border-slate-100 px-3 py-3">
                     {sig
                       ? <pre className="whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-slate-800">{sig}</pre>
-                      : <p className="text-xs text-slate-500">Signature abhi khaali hai. Naam bharo aur save karo.</p>}
+                      : <p className="text-xs text-slate-500">{t("Signature abhi khaali hai. Naam bharo aur save karo.", "The signature is empty. Fill in Name and save.")}</p>}
                     <pre className="mt-2 whitespace-pre-wrap break-words font-sans text-2xs leading-relaxed text-slate-400">{footer("en", "[source]", s.postalAddress)}</pre>
-                    <p className="hint">Saved settings se bana hai. Footer lead ki bhasha mein jaata hai, aur [source] ki jagah lead kahan se mila wo aata hai.</p>
+                    <p className="hint">{t(
+                      "Saved settings se bana hai. Footer lead ki bhasha mein jaata hai, aur [source] ki jagah lead kahan se mila wo aata hai.",
+                      "Built from the saved settings. The footer goes out in the lead's language, and [source] becomes where the lead was found.",
+                    )}</p>
                   </div>
                 </details>
               </div>
             </Section>
 
             {/* flex column: next to the taller Sender profile card the two big boxes grow instead of leaving a blank gap */}
-            <Section id="offer" className="scroll-mt-20 flex flex-col" icon="bulb" title="Offer notes (AI ke liye)"
-              info="AI har mail likhte waqt sirf yahi baatein use karta hai. Sirf sach likho: jo yahan nahi likha, AI wo claim nahi karta. Chhota aur seedha rakho."
-              sub="AI sirf yahi sach baatein use karta hai">
+            <Section id="offer" className="scroll-mt-20 flex flex-col" icon="bulb" title={t("Offer notes (AI ke liye)", "Offer notes (for the AI)")}
+              info={t(
+                "AI har mail likhte waqt sirf yahi baatein use karta hai. Sirf sach likho: jo yahan nahi likha, AI wo claim nahi karta. Chhota aur seedha rakho.",
+                "The AI uses only these points when it writes each mail. Write only true facts: the AI never claims anything that is not written here. Keep it short and direct.",
+              )}
+              sub={t("AI sirf yahi sach baatein use karta hai", "The AI uses only these true facts")}>
               <div className="flex flex-1 flex-col gap-4">
-                <Field className="flex flex-1 flex-col" label="Aap kya offer karte ho" info="Aapki service 1-2 line mein. Har mail ka main point yahi banta hai." hint="1-2 line, seedhi bhasha mein">
+                <Field className="flex flex-1 flex-col" label={t("Aap kya offer karte ho", "What you offer")} info={t("Aapki service 1-2 line mein. Har mail ka main point yahi banta hai.", "Your service in 1-2 lines. This becomes the main point of every mail.")}
+                  hint={t("1-2 line, seedhi bhasha mein", "1-2 lines, in plain words")}>
                   <textarea name="offerWhat" defaultValue={s.offerWhat} rows={4} className="input flex-1" />
                 </Field>
-                <Field className="flex flex-1 flex-col" label="Proof points (sirf sach)" info="Asli results, clients ya experience. AI inhe tabhi use karta hai jab lead ke liye relevant ho, aur kabhi badha-chadha ke nahi." hint="Khaali = AI koi proof claim nahi karega">
-                  <textarea name="offerProof" defaultValue={s.offerProof} rows={4} placeholder="Jaise: 5 saal ka experience, 40+ small business websites" className="input flex-1" />
+                <Field className="flex flex-1 flex-col" label={t("Proof points (sirf sach)", "Proof points (true facts only)")}
+                  info={t(
+                    "Asli results, clients ya experience. AI inhe tabhi use karta hai jab lead ke liye relevant ho, aur kabhi badha-chadha ke nahi.",
+                    "Real results, clients or experience. The AI uses them only when they are relevant to the lead, and never exaggerates them.",
+                  )}
+                  hint={t("Khaali = AI koi proof claim nahi karega", "Empty = the AI will not claim any proof")}>
+                  <textarea name="offerProof" defaultValue={s.offerProof} rows={4} placeholder={t("Jaise: 5 saal ka experience, 40+ small business websites", "e.g. 5 years of experience, 40+ small business websites")} className="input flex-1" />
                 </Field>
-                <Field label="Tone" info="Mail kis andaaz mein likhi jaaye." hint="Jaise: Friendly, short, honest, no hype">
+                <Field label="Tone" info={t("Mail kis andaaz mein likhi jaaye.", "The style the mail should be written in.")} hint={t("Jaise: Friendly, short, honest, no hype", "e.g. Friendly, short, honest, no hype")}>
                   <textarea name="offerTone" defaultValue={s.offerTone} rows={2} className="input" />
                 </Field>
               </div>
             </Section>
 
             <Section id="rules" className="scroll-mt-20 lg:col-span-2" icon="clock" title="Sending rules"
-              info="Mails kab aur kitni jaayengi: sirf chune hue dino mein, window ke andar, har mail ke beech random gap ke saath. Naya domain warm-up se dheere dheere badhta hai, taaki mails spam mein na jaayein."
-              sub="Kab, kitni aur kitne gap pe mails jaayengi">
+              info={t(
+                "Mails kab aur kitni jaayengi: sirf chune hue dino mein, window ke andar, har mail ke beech random gap ke saath. Naya domain warm-up se dheere dheere badhta hai, taaki mails spam mein na jaayein.",
+                "When and how many mails go out: only on the chosen days, inside the window, with a random gap between mails. A new domain ramps up slowly through warm-up, so mails do not land in spam.",
+              )}
+              sub={t("Kab, kitni aur kitne gap pe mails jaayengi", "When, how many and how far apart mails go out")}>
               <div className="grid gap-x-8 gap-y-6 md:grid-cols-2">
-                <Group title="Sending din" icon="calendar" info="Sirf in dino mein mails jaati hain. Din campaign ke timezone (lead ke desh) ke hisaab se gine jaate hain. Weekend band rakhna safe hai." hint="Campaign ke timezone ke hisaab se">
+                <Group title={t("Sending din", "Sending days")} icon="calendar"
+                  info={t(
+                    "Sirf in dino mein mails jaati hain. Din campaign ke timezone (lead ke desh) ke hisaab se gine jaate hain. Weekend band rakhna safe hai.",
+                    "Mails go out only on these days. Days follow the campaign's timezone (the lead's country). Keeping weekends off is safe.",
+                  )}
+                  hint={t("Campaign ke timezone ke hisaab se", "In the campaign's timezone")}>
                   <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
-                    {DAYS.map((d, i) => (
-                      <label key={d} className="relative cursor-pointer">
+                    {DAYS.map(([hi, en], i) => (
+                      <label key={en} className="relative cursor-pointer">
                         <input type="checkbox" name="sendDays" value={i + 1} defaultChecked={s.sendDays.includes(i + 1)} className="peer sr-only" />
-                        <span className="flex h-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-2xs font-medium text-slate-500 transition hover:border-slate-300 hover:text-slate-800 peer-checked:border-indigo-600 peer-checked:bg-indigo-600 peer-checked:text-white peer-focus-visible:ring-2 peer-focus-visible:ring-indigo-500/40 peer-focus-visible:ring-offset-1 xl:text-xs">{d}</span>
+                        <span className="flex h-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-2xs font-medium text-slate-500 transition hover:border-slate-300 hover:text-slate-800 peer-checked:border-indigo-600 peer-checked:bg-indigo-600 peer-checked:text-white peer-focus-visible:ring-2 peer-focus-visible:ring-indigo-500/40 peer-focus-visible:ring-offset-1 xl:text-xs">{t(hi, en)}</span>
                       </label>
                     ))}
                   </div>
                 </Group>
-                <Group title="Sending window" icon="clock" info="Roz sirf is samay ke beech mails jaati hain. Samay campaign ke timezone mein hai, aapke nahi, taaki mail lead ke office time mein pahunche." hint="Campaign ke timezone mein (lead ke desh ka samay)">
+                <Group title="Sending window" icon="clock"
+                  info={t(
+                    "Roz sirf is samay ke beech mails jaati hain. Samay campaign ke timezone mein hai, aapke nahi, taaki mail lead ke office time mein pahunche.",
+                    "Each day mails go out only between these times. The times are in the campaign's timezone, not yours, so mail arrives during the lead's office hours.",
+                  )}
+                  hint={t("Campaign ke timezone mein (lead ke desh ka samay)", "In the campaign's timezone (the lead's local time)")}>
                   <div className="grid grid-cols-2 gap-3">
-                    <Field label="Kab se"><input name="windowStart" type="time" defaultValue={s.windowStart} className="input tabular-nums" /></Field>
-                    <Field label="Kab tak"><input name="windowEnd" type="time" defaultValue={s.windowEnd} className="input tabular-nums" /></Field>
+                    <Field label={t("Kab se", "Start")}><input name="windowStart" type="time" defaultValue={s.windowStart} className="input tabular-nums" /></Field>
+                    <Field label={t("Kab tak", "End")}><input name="windowEnd" type="time" defaultValue={s.windowEnd} className="input tabular-nums" /></Field>
                   </div>
                 </Group>
-                <Group title="Do mails ke beech gap (minute)" icon="history" info="Har mail ke baad random gap, kam se kam aur zyada se zyada ke beech. Isse sending insaan jaisi lagti hai aur spam filter shak nahi karte." hint="Kam gap = tez sending, par spam ka risk zyada">
+                <Group title={t("Do mails ke beech gap (minute)", "Gap between mails (minutes)")} icon="history"
+                  info={t(
+                    "Har mail ke baad random gap, kam se kam aur zyada se zyada ke beech. Isse sending insaan jaisi lagti hai aur spam filter shak nahi karte.",
+                    "A random gap after every mail, between the minimum and the maximum. This makes sending look human, so spam filters do not get suspicious.",
+                  )}
+                  hint={t("Kam gap = tez sending, par spam ka risk zyada", "Shorter gap = faster sending, but a higher spam risk")}>
                   <div className="grid grid-cols-2 gap-3">
-                    <Field label="Kam se kam"><Num name="gapMinMin" value={s.gapMinMin} /></Field>
-                    <Field label="Zyada se zyada"><Num name="gapMaxMin" value={s.gapMaxMin} /></Field>
+                    <Field label={t("Kam se kam", "Minimum")}><Num name="gapMinMin" value={s.gapMinMin} /></Field>
+                    <Field label={t("Zyada se zyada", "Maximum")}><Num name="gapMaxMin" value={s.gapMaxMin} /></Field>
                   </div>
                 </Group>
-                <Group title="Warm-up" icon="trending" info="Naye domain ko dheere dheere badhao. Pehle sending din 'Pehla din' jitni mails, phir har sending din 'Har din +' jitni badhti hain, 'Max / din' tak." hint="Pehle din kitni, har sending din kitni badhengi, max kitni">
+                <Group title="Warm-up" icon="trending"
+                  info={t(
+                    "Naye domain ko dheere dheere badhao. Pehle sending din 'Pehla din' jitni mails, phir har sending din 'Har din +' jitni badhti hain, 'Max / din' tak.",
+                    "Ramp up a new domain slowly. The first sending day sends 'Day one' mails, then each sending day adds '+ per day' more, up to 'Max / day'.",
+                  )}
+                  hint={t("Pehle din kitni, har sending din kitni badhengi, max kitni", "How many on day one, how many more per sending day, and the max")}>
                   <div className="grid grid-cols-3 gap-3">
-                    <Field label="Pehla din"><Num name="warmStart" value={s.warmStart} /></Field>
-                    <Field label="Har din +"><Num name="warmStep" value={s.warmStep} /></Field>
-                    <Field label="Max / din"><Num name="warmMax" value={s.warmMax} /></Field>
+                    <Field label={t("Pehla din", "Day one")}><Num name="warmStart" value={s.warmStart} /></Field>
+                    <Field label={t("Har din +", "+ per day")}><Num name="warmStep" value={s.warmStep} /></Field>
+                    <Field label={t("Max / din", "Max / day")}><Num name="warmMax" value={s.warmMax} /></Field>
                   </div>
                 </Group>
-                <Group title="Mailbox plan" icon="server" info="Aapke mailbox plan ki roz ki sending limit (Hostinger plan mein likhi hoti hai). Safety ke liye app iska 40% se zyada kabhi nahi bhejta. 0 = plan limit nahi lagegi, sirf warm-up."
-                  hint={s.planDailyLimit > 0 ? `Plan ka 40% se zyada kabhi nahi: ${planCap}/din` : "0 = sirf warm-up ki limit lagegi"}>
+                <Group title="Mailbox plan" icon="server"
+                  info={t(
+                    "Aapke mailbox plan ki roz ki sending limit (Hostinger plan mein likhi hoti hai). Safety ke liye app iska 40% se zyada kabhi nahi bhejta. 0 = plan limit nahi lagegi, sirf warm-up.",
+                    "Your mailbox plan's daily sending limit (listed in your Hostinger plan). For safety the app never sends more than 40% of it. 0 = no plan limit, only warm-up.",
+                  )}
+                  hint={s.planDailyLimit > 0
+                    ? t(`Plan ka 40% se zyada kabhi nahi: ${planCap}/din`, `Never more than 40% of the plan: ${planCap}/day`)
+                    : t("0 = sirf warm-up ki limit lagegi", "0 = only the warm-up limit applies")}>
                   <div className="grid grid-cols-2 gap-3">
-                    <Field label="Plan limit / din"><Num name="planDailyLimit" value={s.planDailyLimit} /></Field>
+                    <Field label={t("Plan limit / din", "Plan limit / day")}><Num name="planDailyLimit" value={s.planDailyLimit} /></Field>
                   </div>
                 </Group>
-                <Group title="Roz kitni mails jaayengi" icon="activity" info="Saved settings se: warm-up aur plan limit (40%) mein jo kam ho, roz utni hi mails jaati hain. 'Din' = asli sending din, jis din live mail gayi. Save karne ke baad ye update hota hai."
-                  hint={ramp.steady ? `Din ${ramp.days.length} se roz ${ramp.top}` : `Aage badhte badhte max ${ramp.top}/din tak`}>
+                <Group title={t("Roz kitni mails jaayengi", "Mails per day")} icon="activity"
+                  info={t(
+                    "Saved settings se: warm-up aur plan limit (40%) mein jo kam ho, roz utni hi mails jaati hain. 'Din' = asli sending din, jis din live mail gayi. Save karne ke baad ye update hota hai.",
+                    "From the saved settings: each day, as many mails go out as the lower of warm-up and the plan limit (40%). 'Day' = a real sending day, one on which live mail went out. This updates after you save.",
+                  )}
+                  hint={ramp.steady
+                    ? t(`Din ${ramp.days.length} se roz ${ramp.top}`, `From day ${ramp.days.length}: ${ramp.top} a day`)
+                    : t(`Aage badhte badhte max ${ramp.top}/din tak`, `Keeps growing up to ${ramp.top}/day`)}>
                   <ol className="grid grid-cols-6 gap-1.5">
                     {ramp.days.map((n, i) => (
                       <li key={i} className={`rounded-lg px-1 py-1.5 text-center ring-1 ring-inset ${ramp.steady && i === ramp.days.length - 1 ? "bg-indigo-50 ring-indigo-200/70" : "bg-slate-50 ring-slate-200/70"}`}>
-                        <div className="text-2xs text-slate-400">Din {i + 1}{ramp.steady && i === ramp.days.length - 1 ? "+" : ""}</div>
+                        <div className="text-2xs text-slate-400">{t("Din", "Day")} {i + 1}{ramp.steady && i === ramp.days.length - 1 ? "+" : ""}</div>
                         <div className="text-sm font-semibold tabular-nums text-slate-800">{n}</div>
                       </li>
                     ))}
@@ -371,58 +506,81 @@ export default async function SettingsPage() {
 
               {/* Mode (DRY-RUN / LIVE) and its Dashboard link live in the Connection test card: a link here, next to unsaved fields, invites leaving without saving */}
               <div className="mt-6 grid gap-3 border-t border-slate-100 pt-5 md:grid-cols-2">
-                <Toggle name="approveEach" checked={s.approveEach} title="Har mail approve karke hi bhejo" text="On = har mail 'Approve Karo' page pe rukti hai"
-                  info="On (recommended): AI ki har mail 'Approve Karo' page pe rukti hai aur aapke approve karne ke baad hi jaati hai. Off: drafts apne aap approve ho jaate hain." />
+                <Toggle name="approveEach" checked={s.approveEach} title={t("Har mail approve karke hi bhejo", "Approve every mail before sending")}
+                  text={t("On = har mail 'Approve Karo' page pe rukti hai", "On = every mail waits on the 'Approve\u00a0mails' page")}
+                  info={t(
+                    "On (recommended): AI ki har mail 'Approve Karo' page pe rukti hai aur aapke approve karne ke baad hi jaati hai. Off: drafts apne aap approve ho jaate hain.",
+                    "On (recommended): every AI mail waits on the 'Approve mails' page and goes out only after you approve it. Off: drafts are approved automatically.",
+                  )} />
               </div>
             </Section>
 
             <Section id="ai" className="scroll-mt-20" icon="bot" title="AI (OpenAI-compatible)"
-              info="AI mail drafts likhta hai aur replies ka English translation karta hai. Koi bhi OpenAI-compatible service chalegi: OpenAI, Groq, OpenRouter. Badalne ke baad save karke 'AI test' dabao."
-              sub="Drafts likhne aur replies translate karne ke liye">
+              info={t(
+                "AI mail drafts likhta hai aur replies ka English translation karta hai. Koi bhi OpenAI-compatible service chalegi: OpenAI, Groq, OpenRouter. Badalne ke baad save karke 'AI test' dabao.",
+                "The AI writes mail drafts and translates replies into English. Any OpenAI-compatible service works: OpenAI, Groq, OpenRouter. After a change, save and click 'AI test'.",
+              )}
+              sub={t("Drafts likhne aur replies translate karne ke liye", "For writing drafts and translating replies")}>
               <div className="space-y-4">
-                <Field label="Base URL" info="AI service ka API address. Apni service ka URL neeche ke examples se copy karo."
-                  hint={<span className="flex flex-wrap items-center gap-1">Jaise:{AI_URLS.map((u) => <code key={u} className={`${CODE} break-all`}>{u}</code>)}</span>}>
+                <Field label="Base URL" info={t("AI service ka API address. Apni service ka URL neeche ke examples se copy karo.", "The AI service's API address. Copy your service's URL from the examples below.")}
+                  hint={<span className="flex flex-wrap items-center gap-1">{t("Jaise:", "e.g.")}{AI_URLS.map((u) => <code key={u} className={`${CODE} break-all`}>{u}</code>)}</span>}>
                   <Txt name="aiBaseUrl" value={s.aiBaseUrl} plain mode="url" />
                 </Field>
-                <Field label="Model" info="Kaunsa model mail likhe. Sasta aur tez model kaafi hai." hint="Jaise: gpt-4o-mini"><Txt name="aiModel" value={s.aiModel} plain /></Field>
+                <Field label="Model" info={t("Kaunsa model mail likhe. Sasta aur tez model kaafi hai.", "Which model writes the mails. A cheap, fast model is enough.")} hint={t("Jaise: gpt-4o-mini", "e.g. gpt-4o-mini")}><Txt name="aiModel" value={s.aiModel} plain /></Field>
                 <div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-3 py-2.5 text-xs text-slate-500">
                   <Icon name="lock" size={13} className="text-slate-400" />
-                  <span className="min-w-0 flex-1">API key server ki .env mein <code className={CODE}>AI_API_KEY</code> se aati hai</span>
-                  <Badge v={envOk.ai ? "ok" : "missing"} label={envOk.ai ? "set hai" : "missing"} tone={envOk.ai ? "emerald" : "red"} />
+                  <span className="min-w-0 flex-1">{t(
+                    <>API key server ki .env mein <code className={CODE}>AI_API_KEY</code> se aati hai</>,
+                    <>The API key comes from <code className={CODE}>AI_API_KEY</code> in the server&apos;s .env</>,
+                  )}</span>
+                  <Badge v={envOk.ai ? "ok" : "missing"} label={envOk.ai ? setText : "missing"} tone={envOk.ai ? "emerald" : "red"} />
                 </div>
               </div>
             </Section>
 
             <Section id="dns" className="scroll-mt-20" icon="shield" title="Domain health (DNS)"
-              info="Mail inbox mein pahunche, spam mein nahi: iske liye domain ke DNS records chahiye. SPF aur DKIM zaroori hain, inke bina campaign start nahi hota. DMARC optional hai par achha hai. Records Hostinger hPanel ke DNS Zone mein milte hain."
-              sub="SPF, DKIM aur DMARC records">
+              info={t(
+                "Mail inbox mein pahunche, spam mein nahi: iske liye domain ke DNS records chahiye. SPF aur DKIM zaroori hain, inke bina campaign start nahi hota. DMARC optional hai par achha hai. Records Hostinger hPanel ke DNS Zone mein milte hain.",
+                "For mail to reach the inbox and not spam, the domain needs DNS records. SPF and DKIM are required; without them a campaign cannot start. DMARC is optional but good to have. You find the records in the DNS Zone of Hostinger hPanel.",
+              )}
+              sub={t("SPF, DKIM aur DMARC records", "SPF, DKIM and DMARC records")}>
               <div className="space-y-4">
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label="Sending domain" info="Jis domain se mail jaati hai. Khaali chhodo to From address ka domain le liya jaata hai." hint="Khaali = From address ka domain">
-                    <Txt name="domain" value={s.domain} plain placeholder={s.fromEmail.split("@")[1] || "aapka-domain.com"} />
+                  <Field label="Sending domain" info={t("Jis domain se mail jaati hai. Khaali chhodo to From address ka domain le liya jaata hai.", "The domain mail goes out from. Leave it empty to use the From address's domain.")}
+                    hint={t("Khaali = From address ka domain", "Empty = domain of the From address")}>
+                    <Txt name="domain" value={s.domain} plain placeholder={s.fromEmail.split("@")[1] || t("aapka-domain.com", "your-domain.com")} />
                   </Field>
-                  <Field label="DKIM selector" info="DKIM record ka naam: selector._domainkey.aapka-domain. Hostinger pe aam taur pe hostingermail-a hota hai." hint="Hostinger: hostingermail-a (ya -b, -c)">
+                  <Field label="DKIM selector" info={t(
+                    "DKIM record ka naam: selector._domainkey.aapka-domain. Hostinger pe aam taur pe hostingermail-a hota hai.",
+                    "The DKIM record's name: selector._domainkey.your-domain. On Hostinger it is usually hostingermail-a.",
+                  )} hint={t("Hostinger: hostingermail-a (ya -b, -c)", "Hostinger: hostingermail-a (or -b, -c)")}>
                     <Txt name="dkimSelector" value={s.dkimSelector} plain />
                   </Field>
                 </div>
                 {dns ? (
                   <div className="overflow-hidden rounded-lg border border-slate-200">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-slate-100 bg-slate-50/70 px-3 py-2">
-                      <Check name="SPF" ok={dns.spf} />
-                      <Check name="DKIM" ok={dns.dkim} />
-                      <Check name="DMARC" ok={dns.dmarc} soft />
+                      <Check name="SPF" ok={dns.spf} okText={okText} />
+                      <Check name="DKIM" ok={dns.dkim} okText={okText} />
+                      <Check name="DMARC" ok={dns.dmarc} okText={okText} soft />
                       <span className="text-2xs text-slate-400 sm:ml-auto">{fmt(dns.at)}</span>
                     </div>
                     <pre className="whitespace-pre-wrap break-all px-3 py-2.5 font-mono text-2xs leading-relaxed text-slate-600">{dns.detail}</pre>
                   </div>
                 ) : (
                   <div className="rounded-lg border border-dashed border-slate-300 px-3 py-4 text-center text-xs text-slate-500">
-                    DNS abhi check nahi hua. Save karke upar <a href="#check" className="link">DNS check karo</a> dabao.
+                    {t(
+                      <>DNS abhi check nahi hua. Save karke upar <a href="#check" className="link">DNS check karo</a> dabao.</>,
+                      <>DNS has not been checked yet. Save, then click <a href="#check" className="link">Check DNS</a> above.</>,
+                    )}
                   </div>
                 )}
                 {dnsBad && (
-                  <Callout tone="warn" title="Campaign start nahi hoga" action={<a href="#check" className="btn btn-sm">Dobara check karo</a>}>
-                    Hostinger hPanel ke DNS Zone mein {[!dns?.spf && "SPF", !dns?.dkim && "DKIM"].filter(Boolean).join(" aur ")} record theek karo, phir DNS dobara check karo.
+                  <Callout tone="warn" title={t("Campaign start nahi hoga", "Campaigns cannot start")} action={<a href="#check" className="btn btn-sm">{t("Dobara check karo", "Check again")}</a>}>
+                    {t(
+                      <>Hostinger hPanel ke DNS Zone mein {dnsFix} record theek karo, phir DNS dobara check karo.</>,
+                      <>Fix {dnsFix} in the DNS Zone of Hostinger hPanel, then check DNS again.</>,
+                    )}
                   </Callout>
                 )}
               </div>
@@ -432,9 +590,9 @@ export default async function SettingsPage() {
           {/* on desktop the button sits on the left: toasts appear bottom-right and would cover it */}
           <div className="sticky bottom-[calc(env(safe-area-inset-bottom)+68px)] z-20 flex items-center gap-3 rounded-xl border border-slate-200/80 bg-white/95 px-3 py-2.5 shadow-pop backdrop-blur sm:px-4 lg:bottom-4">
             <p className="flex min-w-0 flex-1 items-center gap-2 text-xs text-slate-600 sm:text-sm">
-              <Icon name="info" size={15} className="hidden text-indigo-500 sm:block" />Badlaav karne ke baad save karna mat bhoolo
+              <Icon name="info" size={15} className="hidden text-indigo-500 sm:block" />{t("Badlaav karne ke baad save karna mat bhoolo", "Don't forget to save after making\u00a0changes")}
             </p>
-            <SubmitButton className="btn-primary shrink-0 lg:order-first" icon="check" pendingText="Save ho raha hai…">Settings save karo</SubmitButton>
+            <SubmitButton className="btn-primary shrink-0 lg:order-first" icon="check" pendingText={t("Save ho raha hai…", "Saving…")}>{t("Settings save karo", "Save settings")}</SubmitButton>
           </div>
         </ActionForm>
       </div>

@@ -1,14 +1,16 @@
 import { NextResponse } from "next/server";
 import { C, db, nowIso } from "@/lib/fsdb";
 import { processRows, type InRow } from "@/lib/importer";
+import { getT } from "@/lib/i18n-server";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
 export async function POST(req: Request) {
+  const { t } = await getT();
   const { listName, sourceNote, rows } = (await req.json()) as { listName: string; sourceNote: string; rows: InRow[] };
-  if (!rows?.length) return NextResponse.json({ error: "List mein koi row nahi hai" }, { status: 400 });
-  if (!sourceNote?.trim()) return NextResponse.json({ error: "Batao ye addresses kahan se mile (ye mail ke footer mein dikhta hai)" }, { status: 400 });
+  if (!rows?.length) return NextResponse.json({ error: t("List mein koi row nahi hai", "The list has no rows") }, { status: 400 });
+  if (!sourceNote?.trim()) return NextResponse.json({ error: t("Batao ye addresses kahan se mile (ye mail ke footer mein dikhta hai)", "Say where you found these addresses (it is shown in the mail footer)") }, { status: 400 });
   const out = await processRows(rows);
   const counts = { send: 0, review: 0, skip: 0 } as Record<string, number>;
   for (const r of out) counts[r.outcome]++;

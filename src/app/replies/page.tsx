@@ -4,8 +4,12 @@ import { Badge, EmptyState, MailPreview, NextStep, PageHeader } from "@/componen
 import { Icon } from "@/components/icons";
 import { Info } from "@/components/Info";
 import { fmt } from "@/lib/time";
+import { getT } from "@/lib/i18n-server";
 
-export const metadata = { title: "Replies" };
+export async function generateMetadata() {
+  const { t } = await getT();
+  return { title: t("Replies", "Replies") };
+}
 
 // avatar colour per reply kind
 const AVATAR: Record<string, string> = {
@@ -15,6 +19,7 @@ const AVATAR: Record<string, string> = {
 const isBounce = (kind: string) => kind === "bounce" || kind === "softbounce";
 
 export default async function Replies({ searchParams }: { searchParams: Promise<{ all?: string }> }) {
+  const { t } = await getT();
   const { all } = await searchParams;
   const q = all ? C.replies.orderBy("receivedAt", "desc") : C.replies.where("kind", "in", ["reply", "optout"]).orderBy("receivedAt", "desc");
   const replies = rows<Reply>(await q.limit(200).get());
@@ -23,20 +28,25 @@ export default async function Replies({ searchParams }: { searchParams: Promise<
     const m = await C.messages.doc(id).get();
     if (m.exists) msgs.set(id, { id, ...m.data() } as Message);
   }));
+  const theirReply = t("Unka jawab", "Their reply");
+  const bounceReport = t("Bounce report (mail server ka jawab)", "Bounce report (mail server reply)");
 
   return (
     <div className="space-y-4">
       <PageHeader
         title="Replies (Inbox)"
-        info="Worker har 10 minute mein aapka inbox sync karta hai. Kisi lead ka reply aate hi uska status 'Reply aaya' ho jata hai. Opt-out aur bounce wale address apne aap block list mein chale jaate hain, unhe dobara kabhi mail nahi jayegi."
-        sub="Leads ke jawab, opt-out aur bounce ek jagah"
+        info={t("Worker har 10 minute mein aapka inbox sync karta hai. Kisi lead ka reply aate hi uska status 'Reply aaya' ho jata hai. Opt-out aur bounce wale address apne aap block list mein chale jaate hain, unhe dobara kabhi mail nahi jayegi.",
+          "The worker syncs your inbox every 10 minutes. As soon as a lead replies, its status changes to 'Replied'. Opted-out and bounced addresses go to the block list automatically and will never be emailed again.")}
+        sub={t("Leads ke jawab, opt-out aur bounce ek jagah", "Replies, opt-outs and bounces from leads in one place")}
         actions={
           <div className="flex items-center gap-2">
             <div className="seg">
-              <Link href="/replies" className={`seg-item ${!all ? "seg-item-on" : ""}`}><Icon name="reply" size={13} />Reply & opt-out</Link>
-              <Link href="/replies?all=1" className={`seg-item ${all ? "seg-item-on" : ""}`}><Icon name="inbox" size={13} />Sab dikhao</Link>
+              <Link href="/replies" className={`seg-item ${!all ? "seg-item-on" : ""}`}><Icon name="reply" size={13} />{t("Reply & opt-out", "Replies & opt-outs")}</Link>
+              <Link href="/replies?all=1" className={`seg-item ${all ? "seg-item-on" : ""}`}><Icon name="inbox" size={13} />{t("Sab dikhao", "Show all")}</Link>
             </div>
-            <Info title="Kya dikhega?" text="'Reply & opt-out' mein sirf leads ke asli jawab aur mana karne wali mails dikhti hain. 'Sab dikhao' mein bounce (galat address) aur auto-reply (jaise out of office) bhi dikhte hain." />
+            <Info title={t("Kya dikhega?", "What is shown?")}
+              text={t("'Reply & opt-out' mein sirf leads ke asli jawab aur mana karne wali mails dikhti hain. 'Sab dikhao' mein bounce (galat address) aur auto-reply (jaise out of office) bhi dikhte hain.",
+                "'Replies & opt-outs' shows only real replies from leads and mails saying no. 'Show all' also shows bounces (wrong addresses) and auto-replies (like out of office).")} />
           </div>
         }
       />
@@ -44,10 +54,12 @@ export default async function Replies({ searchParams }: { searchParams: Promise<
       {replies.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-2 px-0.5 text-xs text-slate-500">
           <span className="flex items-center gap-1.5">
-            {replies.length === 1 ? "1 mail" : `${replies.length} mails`} · nayi sabse upar
-            <Info size={12} title="Har card mein kya hai?" text="Upar: kisne bheja aur kab. Beech mein: aapki bheji hui mail (click karke kholo). Neeche: unka jawab, aur doosri bhasha ho to English translation bhi. Bounce card mein neeche mail server ki report hoti hai ki mail kyun nahi pahunchi. Naam pe click karke us contact ki poori history dekho." />
+            {replies.length === 1 ? "1 mail" : `${replies.length} mails`} · {t("nayi sabse upar", "newest first")}
+            <Info size={12} title={t("Har card mein kya hai?", "What is in each card?")}
+              text={t("Upar: kisne bheja aur kab. Beech mein: aapki bheji hui mail (click karke kholo). Neeche: unka jawab, aur doosri bhasha ho to English translation bhi. Bounce card mein neeche mail server ki report hoti hai ki mail kyun nahi pahunchi. Naam pe click karke us contact ki poori history dekho.",
+                "Top: who sent it and when. Middle: the mail you sent (click to open). Bottom: their reply, plus an English translation if it is in another language. In a bounce card, the bottom shows the mail server's report on why the mail did not arrive. Click the name to see that contact's full history.")} />
           </span>
-          {replies.length >= 200 && <span>Sirf latest 200 dikh rahi hain</span>}
+          {replies.length >= 200 && <span>{t("Sirf latest 200 dikh rahi hain", "Showing only the latest 200")}</span>}
         </div>
       )}
 
@@ -80,18 +92,18 @@ export default async function Replies({ searchParams }: { searchParams: Promise<
               <details className="group rounded-lg border border-slate-200/80 bg-slate-50/60">
                 <summary className="flex cursor-pointer select-none items-center gap-2 px-3 py-2 text-xs text-slate-600 transition hover:text-slate-900">
                   <Icon name="send" size={13} className="text-slate-400" />
-                  <span className="min-w-0 flex-1 truncate">Aapki bheji mail: <span className="font-medium text-slate-800">{m.subject}</span> ({fmt(m.sentAt)})</span>
+                  <span className="min-w-0 flex-1 truncate">{t("Aapki bheji mail:", "Mail you sent:")} <span className="font-medium text-slate-800">{m.subject}</span> ({fmt(m.sentAt)})</span>
                   <Icon name="chevron-down" size={14} className="text-slate-400 transition group-open:rotate-180" />
                 </summary>
                 <div className={`grid gap-3 border-t border-slate-200/80 p-3 ${m.bodyEn ? "md:grid-cols-2" : ""}`}>
-                  <MailPreview label="Aapki mail" subject={m.subject} text={m.body} />
+                  <MailPreview label={t("Aapki mail", "Your mail")} subject={m.subject} text={m.body} />
                   {m.bodyEn && <MailPreview label="English translation" tone="translation" subject={m.subjectEn || undefined} text={m.bodyEn} />}
                 </div>
               </details>
             )}
 
             <div className={`grid gap-4 ${r.bodyEn ? "md:grid-cols-2" : ""}`}>
-              <MailPreview label={bounce ? "Bounce report (mail server ka jawab)" : "Unka jawab"} subject={r.subject ?? ""} text={r.body.slice(0, 4000)} />
+              <MailPreview label={bounce ? bounceReport : theirReply} subject={r.subject ?? ""} text={r.body.slice(0, 4000)} />
               {r.bodyEn && <MailPreview label="English translation" tone="translation" text={r.bodyEn} />}
             </div>
           </article>
@@ -99,15 +111,20 @@ export default async function Replies({ searchParams }: { searchParams: Promise<
       })}
 
       {replies.length ? (
-        <NextStep tone="emerald" text="Reply ka jawab apne mailbox (Hostinger webmail) se do. Ye page sirf padhne ke liye hai, yahan se koi mail nahi jaati." href="/contacts?status=replied" cta="Reply wale contacts" />
+        <NextStep tone="emerald"
+          text={t("Reply ka jawab apne mailbox (Hostinger webmail) se do. Ye page sirf padhne ke liye hai, yahan se koi mail nahi jaati.",
+            "Answer replies from your own mailbox (Hostinger webmail). This page is read-only; no mail is sent from here.")}
+          href="/contacts?status=replied" cta={t("Reply wale contacts", "Replied contacts")} />
       ) : (
         <>
           <div className="card-flush">
-            <EmptyState icon="inbox" title={all ? "Inbox mein abhi kuch nahi aaya" : "Abhi koi reply nahi"}
-              text="Worker har 10 minute mein inbox sync karta hai. Turant check karna ho to Settings mein 'Inbox abhi sync karo' dabao."
-              href="/settings" cta="Settings kholo" />
+            <EmptyState icon="inbox" title={all ? t("Inbox mein abhi kuch nahi aaya", "Nothing in the inbox yet") : t("Abhi koi reply nahi", "No replies yet")}
+              text={t("Worker har 10 minute mein inbox sync karta hai. Turant check karna ho to Settings mein 'Inbox abhi sync karo' dabao.",
+                "The worker syncs the inbox every 10 minutes. To check right away, press 'Sync inbox now' in Settings.")}
+              href="/settings" cta={t("Settings kholo", "Open settings")} />
           </div>
-          <NextStep text="Jab tak reply nahi aata, dekho kaunsi mails kab aur kisko gayi hain." href="/sent" cta="Bheji gayi mails dekho" />
+          <NextStep text={t("Jab tak reply nahi aata, dekho kaunsi mails kab aur kisko gayi hain.", "Until replies come in, see which mails went out, when and to whom.")}
+            href="/sent" cta={t("Bheji gayi mails dekho", "See sent mails")} />
         </>
       )}
     </div>

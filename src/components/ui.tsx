@@ -1,9 +1,12 @@
+"use client";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { Icon, type IconName } from "./icons";
 import { Info } from "./Info";
+import { useT } from "./lang";
 
-// Shared building blocks. Server components can use all of these (Info is a small client island).
+// Shared building blocks, used by server and client pages. They are client components only because
+// a few have built-in texts (status labels, default titles) that follow the chosen language.
 
 export type Tone = "slate" | "sky" | "amber" | "emerald" | "violet" | "red" | "orange" | "indigo";
 
@@ -18,51 +21,52 @@ const BADGE_TONE: Record<Tone, string> = {
   indigo: "bg-indigo-50 text-indigo-700 ring-indigo-600/15",
 };
 
-/** Hinglish label and colour for every status value the app stores. */
-const STATUS: Record<string, [string, Tone]> = {
-  ready: ["Ready", "sky"],
-  needs_review: ["Review chahiye", "amber"],
-  rejected: ["Reject kiya", "slate"],
-  sent: ["Sent", "emerald"],
-  replied: ["Reply aaya", "violet"],
-  bounced: ["Bounce", "red"],
-  opted_out: ["Opt-out", "orange"],
-  check_manual: ["Manual check", "red"],
-  failed: ["Fail", "red"],
-  suppressed: ["Block list", "slate"],
-  already_contacted: ["Pehle contact hua", "slate"],
-  running: ["Chal raha hai", "emerald"],
-  paused: ["Ruka hua", "amber"],
-  draft: ["Draft", "slate"],
-  done: ["Poora hua", "indigo"],
-  send: ["Bhejenge", "emerald"],
-  skip: ["Skip", "slate"],
-  review: ["Review", "amber"],
-  retry: ["Retry", "amber"],
-  sending: ["Ja rahi hai", "sky"],
-  blocked: ["Blocked", "red"],
-  info: ["Info", "slate"],
-  warn: ["Warning", "amber"],
-  error: ["Error", "red"],
-  "dry-run": ["Dry-run", "amber"],
-  live: ["Live", "emerald"],
-  reply: ["Reply", "violet"],
-  optout: ["Opt-out", "orange"],
-  bounce: ["Bounce", "red"],
-  softbounce: ["Soft bounce", "amber"],
-  auto: ["Auto-reply", "slate"],
-  contacted_elsewhere: ["Aapne khud mail kiya", "slate"],
-  not_sent_checked: ["Nahi gayi (check kiya)", "slate"],
-  uncertain: ["Pakka nahi", "amber"],
-  refused_will_retry: ["Retry hoga", "amber"],
+/** Label (Hinglish, English) and colour for every status value the app stores. */
+const STATUS: Record<string, [string, string, Tone]> = {
+  ready: ["Ready", "Ready", "sky"],
+  needs_review: ["Review chahiye", "Needs review", "amber"],
+  rejected: ["Reject kiya", "Rejected", "slate"],
+  sent: ["Sent", "Sent", "emerald"],
+  replied: ["Reply aaya", "Replied", "violet"],
+  bounced: ["Bounce", "Bounced", "red"],
+  opted_out: ["Opt-out", "Opted out", "orange"],
+  check_manual: ["Manual check", "Manual check", "red"],
+  failed: ["Fail", "Failed", "red"],
+  suppressed: ["Block list", "Blocked", "slate"],
+  already_contacted: ["Pehle contact hua", "Already contacted", "slate"],
+  running: ["Chal raha hai", "Running", "emerald"],
+  paused: ["Ruka hua", "Paused", "amber"],
+  draft: ["Draft", "Draft", "slate"],
+  done: ["Poora hua", "Done", "indigo"],
+  send: ["Bhejenge", "Will send", "emerald"],
+  skip: ["Skip", "Skip", "slate"],
+  review: ["Review", "Review", "amber"],
+  retry: ["Retry", "Retry", "amber"],
+  sending: ["Ja rahi hai", "Sending", "sky"],
+  blocked: ["Blocked", "Blocked", "red"],
+  info: ["Info", "Info", "slate"],
+  warn: ["Warning", "Warning", "amber"],
+  error: ["Error", "Error", "red"],
+  "dry-run": ["Dry-run", "Dry-run", "amber"],
+  live: ["Live", "Live", "emerald"],
+  reply: ["Reply", "Reply", "violet"],
+  optout: ["Opt-out", "Opt-out", "orange"],
+  bounce: ["Bounce", "Bounce", "red"],
+  softbounce: ["Soft bounce", "Soft bounce", "amber"],
+  auto: ["Auto-reply", "Auto-reply", "slate"],
+  contacted_elsewhere: ["Aapne khud mail kiya", "You mailed them yourself", "slate"],
+  not_sent_checked: ["Nahi gayi (check kiya)", "Not sent (checked)", "slate"],
+  uncertain: ["Pakka nahi", "Uncertain", "amber"],
+  refused_will_retry: ["Retry hoga", "Will retry", "amber"],
 };
 
 export function Badge({ v, label, tone, dot = true }: { v: string; label?: string; tone?: Tone; dot?: boolean }) {
-  const [l, t] = STATUS[v] || [v.replace(/_/g, " "), "slate" as Tone];
+  const { lang } = useT();
+  const [hi, en, t] = STATUS[v] || [v.replace(/_/g, " "), v.replace(/_/g, " "), "slate" as Tone];
   return (
     <span className={`badge ${BADGE_TONE[tone || t]}`}>
       {dot && <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />}
-      {label ?? l}
+      {label ?? (lang === "en" ? en : hi)}
     </span>
   );
 }
@@ -157,8 +161,10 @@ const NEXT_TONE = {
 };
 
 /** "Aage kya karna hai?" guidance: tells the user where to go next and what to do there. */
-export function NextStep({ text, href, cta, title = "Aage kya karna hai?", tone = "indigo", children }: { text: ReactNode; href?: string; cta?: string; title?: string; tone?: keyof typeof NEXT_TONE; children?: ReactNode }) {
+export function NextStep({ text, href, cta, title, tone = "indigo", children }: { text: ReactNode; href?: string; cta?: string; title?: string; tone?: keyof typeof NEXT_TONE; children?: ReactNode }) {
+  const tr = useT().t;
   const t = NEXT_TONE[tone];
+  title ??= tr("Aage kya karna hai?", "What to do next?");
   return (
     <div className={`flex flex-col gap-3 rounded-xl border bg-gradient-to-r to-white p-4 sm:flex-row sm:items-center ${t.box}`}>
       <div className="flex min-w-0 flex-1 items-start gap-3">
@@ -270,6 +276,7 @@ export function Progress({ value, tone = "indigo" }: { value: number; tone?: "in
 
 /** A mail shown like a small letter: subject on top, text below. tone="translation" for the English copy. */
 export function MailPreview({ label, subject, text, tone = "mail", footer }: { label: string; subject?: ReactNode; text: string; tone?: "mail" | "translation"; footer?: ReactNode }) {
+  const { t } = useT();
   const tr = tone === "translation";
   return (
     <div className="min-w-0">
@@ -277,7 +284,7 @@ export function MailPreview({ label, subject, text, tone = "mail", footer }: { l
         <Icon name={tr ? "globe" : "mail"} size={12} />{label}
       </div>
       <div className={`overflow-hidden rounded-lg border ${tr ? "border-indigo-100 bg-indigo-50/40" : "border-slate-200 bg-white"}`}>
-        {subject !== undefined && <div className={`border-b px-3 py-2 text-sm font-semibold text-slate-900 ${tr ? "border-indigo-100" : "border-slate-100"}`}>{subject || "(subject nahi hai)"}</div>}
+        {subject !== undefined && <div className={`border-b px-3 py-2 text-sm font-semibold text-slate-900 ${tr ? "border-indigo-100" : "border-slate-100"}`}>{subject || t("(subject nahi hai)", "(no subject)")}</div>}
         <pre className="whitespace-pre-wrap break-words px-3 py-2.5 font-sans text-sm leading-relaxed text-slate-700">{text}</pre>
         {footer}
       </div>

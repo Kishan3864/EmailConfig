@@ -86,7 +86,7 @@ export async function notify(subject: string, text: string) {
 export async function testSmtp() {
   const s = await getSettings();
   const t = smtpTransport(s);
-  try { await t.verify(); return "SMTP theek hai: login ho gaya"; }
+  try { await t.verify(); return "SMTP OK: login accepted"; }
   finally { t.close(); }
 }
 
@@ -96,16 +96,16 @@ export async function testImap() {
   await c.connect();
   try {
     const boxes = await c.list();
-    return `IMAP theek hai: ${boxes.length} folders mile\n(${boxes.slice(0, 6).map((b) => b.path).join(", ")})`;
+    return `IMAP OK: ${boxes.length} folders (${boxes.slice(0, 6).map((b) => b.path).join(", ")})`;
   } finally { await c.logout().catch(() => {}); }
 }
 
 export async function sendTestMail() {
   const s = await getSettings();
-  if (!s.testEmail) throw new Error("Pehle Settings mein apna test address daalo");
+  if (!s.testEmail) throw new Error("Set your test address first");
   // same signature, footer and logo setting as a real outreach mail, so the test shows what leads will see
   const parts = mailParts(s, "If you can read this, SMTP sending works.\n\nThis is how your signature and footer look in a real mail.", "en", "this test");
   const { raw } = await buildRaw({ s, to: s.testEmail, subject: "Test mail from your outreach app", ...parts, listUnsub: true });
   const info = await sendRaw(s, s.testEmail, raw);
-  return `Test mail ${s.testEmail} pe bhej di\nServer ka jawab: ${info.response}`;
+  return `Sent to ${s.testEmail}: ${info.response}`;
 }

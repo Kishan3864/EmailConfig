@@ -1,15 +1,17 @@
 import { NextResponse } from "next/server";
 import { C, db, key, nowIso, rows as toRows, type ImportRow } from "@/lib/fsdb";
 import { log } from "@/lib/log";
+import { getT } from "@/lib/i18n-server";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
 export async function POST(req: Request) {
+  const { t } = await getT();
   const { listId } = await req.json();
   const listRef = C.lists.doc(String(listId));
   const list = await listRef.get();
-  if (!list.exists || list.get("confirmed")) return NextResponse.json({ error: "List nahi mili, ya pehle hi confirm ho chuki hai" }, { status: 400 });
+  if (!list.exists || list.get("confirmed")) return NextResponse.json({ error: t("List nahi mili, ya pehle hi confirm ho chuki hai", "List not found, or it was already confirmed") }, { status: 400 });
   const rows = toRows<ImportRow>(await listRef.collection("rows").where("outcome", "in", ["send", "review"]).get());
 
   let created = 0;

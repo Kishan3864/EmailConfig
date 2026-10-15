@@ -126,7 +126,7 @@ async function handle(p: ParsedMail) {
 
 export async function syncInbox() {
   const s = await getSettings();
-  if (!s.fromEmail || !(process.env.IMAP_PASSWORD || process.env.SMTP_PASSWORD)) return "Error: IMAP set nahi hai (From address ya password missing)";
+  if (!s.fromEmail || !(process.env.IMAP_PASSWORD || process.env.SMTP_PASSWORD)) return "imap not configured";
   const st = await getState();
   const c = imapClient(s);
   await c.connect();
@@ -154,5 +154,5 @@ export async function syncInbox() {
       await setState({ imapUidValidity: String(mb.uidValidity), imapLastUid: todo.length < all.length ? maxUid : Math.max(maxUid, last === 0 ? mb.uidNext - 1 : maxUid), lastSyncAt: new Date().toISOString() });
     } finally { lock.release(); }
   } finally { await c.logout().catch(() => {}); }
-  return `Inbox sync ho gaya\n${count} naye mail process hue`;
+  return `processed ${count}`;
 }

@@ -4,9 +4,11 @@ import { getSettings } from "@/lib/settings";
 import { fullText } from "@/lib/compose";
 import type { T } from "@/lib/i18n";
 import { getT } from "@/lib/i18n-server";
+import { knowsWhatTheyDo } from "@/lib/leadinfo";
 import { LOGO_HEIGHT, LOGO_PNG_BASE64, LOGO_WIDTH } from "@/lib/logo";
+import { isTemplateId, templateOf } from "@/lib/templates";
 import { ActionButton } from "@/components/ActionButton";
-import { factChips, parseFacts } from "@/components/factChips";
+import { knownItems, parseFacts, siteNote } from "@/components/factChips";
 import { Info } from "@/components/Info";
 import { Icon } from "@/components/icons";
 import { ToastOnMount } from "@/components/toast";
@@ -77,12 +79,12 @@ export default async function Review() {
       "Approved mails go out one by one in the sending window. What was sent shows up on the Sent page.",
     );
   const info = t(
-    `AI ki likhi har mail yahan rukti hai: aapke approve kiye bina koi mail nahi jaati.
-Approve karo = mail sending window mein jayegi (jab uska campaign chal raha ho). Naya version = AI dobara likhega.
+    `Har nayi mail (AI ki likhi ya template se bani) yahan rukti hai: aapke approve kiye bina koi mail nahi jaati.
+Approve karo = mail sending window mein jayegi (jab uska campaign chal raha ho). Naya version = AI dobara likhega (template wali mail template se dobara banegi).
 Reject karo = is lead ko kabhi mail nahi jayegi. Edit = text khud badlo, same rules check honge.
 DRY-RUN mein approve ki hui mail test address pe jaati hai. Approval yaad rehta hai: LIVE on karne ke baad wahi mail asli lead ko bhi jayegi.`,
-    `Every mail the AI writes waits here: no mail goes out without your approval.
-Approve = the mail goes out in the sending window (while its campaign is running). New version = the AI writes it again.
+    `Every new mail (written by the AI or made from a template) waits here: no mail goes out without your approval.
+Approve = the mail goes out in the sending window (while its campaign is running). New version = the AI writes it again (a template mail is made again from its template).
 Reject = this lead will never be emailed. Edit = change the text yourself; the same rules are checked.
 In DRY-RUN an approved mail goes to your test address. The approval is kept: once LIVE is on, the same mail also goes to the real lead.`,
   );
@@ -140,7 +142,13 @@ In DRY-RUN an approved mail goes to your test address. The approval is kept: onc
         const list = lead ? lists.get(lead.listId) : undefined;
         const camp = m.campaignId ? campaigns.get(m.campaignId) : undefined;
         const hold = holdOf(m);
+        // a template campaign fills a fixed text (no AI, so no AI facts); an AI campaign gets only the known facts
+        const tpl = camp && isTemplateId(camp.mailType) ? templateOf(s, camp.mailType) : null;
+        const tplName = tpl ? (tpl.name || "").trim() || `Template ${tpl.id.slice(3)}` : "";
         const facts = parseFacts(lead?.facts);
+        const known = lead ? knownItems(lead, facts, lang) : [];
+        const site = lead ? siteNote(lead.website, facts, lang) : null;
+        const guessed = !!lead && !knowsWhatTheyDo(known);
         const name = m.businessName || m.leadEmail;
         const edited = (m as Message & { edited?: boolean }).edited;
         const translation = m.bodyEn ? (
@@ -183,10 +191,15 @@ In DRY-RUN an approved mail goes to your test address. The approval is kept: onc
               <div className="flex shrink-0 items-center gap-1.5 pt-0.5">
                 <span className="text-2xs font-medium tabular-nums text-slate-400" title={t(`${n} mein se mail number ${i + 1}`, `Mail ${i + 1} of ${n}`)}>{i + 1}/{n}</span>
                 <Info title={t("Ye card kya hai", "About this card")} size={13}
-                  text={t(
-                    "Is lead ke liye AI ki likhi draft. Naam pe click karo to contact ki poori history khulegi, campaign ke naam pe click karo to campaign ka page. Facts aur mail padho, phir neeche se Approve, Edit, Naya version ya Reject karo.",
-                    "The draft the AI wrote for this lead. Click the name to open the contact's full history, or the campaign name to open the campaign page. Read the facts and the mail, then choose Approve, Edit, New version or Reject below.",
-                  )} />
+                  text={tpl
+                    ? t(
+                      "Is lead ke liye template se bani draft. Naam pe click karo to contact ki poori history khulegi, campaign ke naam pe click karo to campaign ka page. Mail padho, phir neeche se Approve, Edit, Naya version ya Reject karo.",
+                      "The draft made from a template for this lead. Click the name to open the contact's full history, or the campaign name to open the campaign page. Read the mail, then choose Approve, Edit, New version or Reject below.",
+                    )
+                    : t(
+                      "Is lead ke liye AI ki likhi draft. Naam pe click karo to contact ki poori history khulegi, campaign ke naam pe click karo to campaign ka page. ‘AI ko ye pata tha’ wali list aur mail padho, phir neeche se Approve, Edit, Naya version ya Reject karo.",
+                      "The draft the AI wrote for this lead. Click the name to open the contact's full history, or the campaign name to open the campaign page. Read the ‘What the AI knew’ list and the mail, then choose Approve, Edit, New version or Reject below.",
+                    )} />
               </div>
             </header>
 
@@ -197,19 +210,58 @@ In DRY-RUN an approved mail goes to your test address. The approval is kept: onc
                   {hold.text}
                 </Callout>
               )}
-              <div className="rounded-lg bg-slate-50 px-3 py-2.5">
-                <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
-                  <Icon name="search" size={13} className="text-slate-400" />{t("AI ko ye facts mile:", "Facts given to the AI:")}
-                  <Info title={t("Website ke facts", "Website facts")} size={13}
+              {tpl ? (
+                <div className="flex items-start gap-1.5 rounded-lg bg-slate-50 px-3 py-2.5 text-xs text-slate-600">
+                  <Icon name="file" size={13} className="mt-px shrink-0 text-slate-400" />
+                  <span className="min-w-0 break-words">{t("Template se bani:", "Written from template:")} <span className="font-medium text-slate-800">{tplName}</span></span>
+                  <Info title={t("Template se bani mail", "A mail made from a template")} size={13}
                     text={t(
-                      "Homepage check karke AI ko bilkul yahi baatein di gayi thi, isse zyada kuch nahi. Mail mein website ke baare mein jo likha hai wo inse match hona chahiye; galat lage to Edit ya Reject karo.",
-                      "After the homepage check, the AI was given exactly these points and nothing more. Whatever the mail says about the website must match them; if something looks wrong, Edit or Reject.",
+                      "Is campaign mein AI mail nahi likhta: ye mail Settings ke ‘Email templates’ wale fixed template se bani hai. {{business}}, {{contact}} jaise placeholders lead ki jaankari se bhare gaye; jo jaankari nahi thi, wahan template ka default text aaya. Padh ke Approve, Edit ya Reject karo.",
+                      "In this campaign the AI does not write the mails: this mail was made from a fixed template in Settings → ‘Email templates’. Placeholders like {{business}} and {{contact}} were filled from the lead's details; where a detail was missing, the template's default text was used. Read it, then Approve, Edit or Reject.",
                     )} />
                 </div>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {factChips(facts, lang).map((b, j) => <span key={j} className="max-w-full break-words rounded-md bg-white px-2 py-0.5 text-xs text-slate-700 ring-1 ring-inset ring-slate-200">{b}</span>)}
+              ) : (
+                <div className="rounded-lg bg-slate-50 px-3 py-2.5">
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
+                    <Icon name="bot" size={13} className="text-slate-400" />{t("AI ko ye pata tha", "What the AI knew")}
+                    <Info title={t("AI ko ye pata tha", "What the AI knew")} size={13}
+                      text={t(
+                        "Mail likhte waqt AI ko is lead ke baare mein sirf yahi baatein di gayi thi, aur wo sirf inhi ka use kar sakta hai. Website ka title / description sirf ye samajhne ke liye hai ki business kya karta hai: AI kabhi website pe comment nahi karta (jaise ‘maine aapka homepage dekha’). Agar mail mein koi aisi baat hai jo is list mein nahi hai, to use Edit karo ya Reject karo.",
+                        "When writing the mail, the AI was given only these points about this lead, and it may use only them. The website title / description is only there to understand what the business does: the AI never comments on the website (like ‘I saw your homepage’). If the mail says anything that is not in this list, Edit or Reject it.",
+                      )} />
+                  </div>
+                  {known.length ? (
+                    <dl className="mt-2 grid gap-y-2 text-xs sm:grid-cols-[auto_minmax(0,1fr)] sm:gap-x-4 sm:gap-y-1">
+                      {known.map((k) => (
+                        <div key={k.key} className="min-w-0 sm:contents">
+                          <dt className="text-slate-500 sm:whitespace-nowrap">{k.label}</dt>
+                          <dd className="min-w-0 break-words text-slate-800">{k.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  ) : (
+                    <p className="mt-2 text-xs text-slate-700">
+                      {lead
+                        ? t("Email address ke siwa is lead ke baare mein kuch nahi pata tha.", "Nothing was known about this lead except the email address.")
+                        : t("Is mail ka lead nahi mila.", "This mail's lead was not found.")}
+                    </p>
+                  )}
+                  {(site || guessed) && (
+                    <div className="mt-2 space-y-1 border-t border-slate-200/70 pt-2 text-xs">
+                      {site && <p className="flex items-start gap-1.5 text-slate-500"><Icon name="globe" size={12} className="mt-0.5 shrink-0 text-slate-400" /><span className="min-w-0 break-words">{site}</span></p>}
+                      {guessed && (
+                        <p className="flex items-start gap-1.5 text-amber-700">
+                          <Icon name="alert" size={12} className="mt-0.5 shrink-0" />
+                          <span className="min-w-0">{t(
+                            "AI ko nahi pata tha ki ye business kya karta hai: mail mein unke kaam ke baare mein koi baat nahi honi chahiye.",
+                            "The AI did not know what this business does: the mail must not say anything about their work.",
+                          )}</span>
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
-              </div>
+              )}
 
               <div className={translation ? "grid gap-4 md:grid-cols-2" : "max-w-2xl"}>
                 <MailPreview label={t("Mail (jaisi jayegi)", "Mail (as it will be sent)")} subject={m.subject} text={fullText(s, m.body, m.language, list?.sourceNote || "")}
@@ -228,7 +280,8 @@ In DRY-RUN an approved mail goes to your test address. The approval is kept: onc
             <footer className="grid grid-cols-2 gap-2 border-t border-slate-100 bg-slate-50/60 px-4 py-3 sm:flex sm:flex-wrap sm:items-center sm:px-5">
               <ActionButton action={approveMessage.bind(null, m.id)} label={t("Approve karo", "Approve")} icon="check" className={`btn-success col-span-2 ${WRAP}`} />
               <DraftEditor id={m.id} subject={m.subject} body={m.body} language={m.language} businessName={m.businessName || ""} />
-              <ActionButton action={regenerateDraft.bind(null, m.id)} label={t("Naya version likho", "Write a new version")} icon="refresh" pendingText={t("AI likh raha hai…", "AI is writing…")} className={`btn ${WRAP}`} />
+              <ActionButton action={regenerateDraft.bind(null, m.id)} label={t("Naya version likho", "Write a new version")} icon="refresh"
+                pendingText={tpl ? t("Template se ban rahi hai…", "Filling the template…") : t("AI likh raha hai…", "AI is writing…")} className={`btn ${WRAP}`} />
               <ActionButton action={rejectMessage.bind(null, m.id)} label={t("Reject karo", "Reject")} icon="x" confirmText={t("Dobara dabao: ye lead kabhi mail nahi paayega", "Click again: this lead will never be emailed")}
                 className={`btn col-span-2 text-red-600 hover:border-red-200 hover:bg-red-50 hover:text-red-700 sm:ml-auto ${WRAP}`} />
             </footer>

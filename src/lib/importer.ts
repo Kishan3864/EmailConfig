@@ -3,7 +3,10 @@ import { C, key } from "./fsdb";
 import { hasMx } from "./dnscheck";
 import { getAllChunked } from "./ledger";
 
-export type InRow = { email?: string; businessName?: string; website?: string; phone?: string; country?: string; chain?: string; raw?: string };
+export type InRow = {
+  email?: string; businessName?: string; website?: string; phone?: string; country?: string; chain?: string; raw?: string;
+  contactName?: string; city?: string; category?: string; about?: string; note?: string;
+};
 export type OutRow = InRow & { rowNo: number; outcome: "send" | "skip" | "review"; reason?: string; businessKey?: string };
 
 export const ROLE_WORDS = ["dpo", "privacy", "rgpd", "gdpr", "legal", "abuse", "postmaster", "noreply", "no-reply", "donotreply", "press", "presse", "jobs", "job", "recrutement", "recruiting", "recruitment", "hr", "rh", "careers", "career", "franchise", "webmaster", "mailer-daemon"];

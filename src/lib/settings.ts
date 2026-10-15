@@ -16,6 +16,11 @@ export type Settings = {
   dryRun: boolean;
   signatureLogo: boolean; // HTML mail with the logo embedded in the signature
   approveEach: boolean; // every draft must be approved by me before it can be sent
+  fromName: string; // name shown in the lead's inbox; blank = business name, then sender name
+  // three fixed mail templates a campaign can use instead of the AI (placeholders: see lib/templates.ts)
+  tpl1Name: string; tpl1Subject: string; tpl1Body: string;
+  tpl2Name: string; tpl2Subject: string; tpl2Body: string;
+  tpl3Name: string; tpl3Subject: string; tpl3Body: string;
 };
 
 export const DEFAULTS: Settings = {
@@ -33,6 +38,40 @@ export const DEFAULTS: Settings = {
   dryRun: true,
   signatureLogo: false,
   approveEach: true,
+  fromName: "",
+  tpl1Name: "Website intro",
+  tpl1Subject: "a website idea for {{business}}",
+  tpl1Body: [
+    "Hello {{contact|there}},",
+    "",
+    "I'm writing from {{my_business}}. We build clear, fast websites for local businesses like {{business}} in {{city|your area}}, so that new customers can understand what you offer and contact you in a few seconds, also from a phone.",
+    "",
+    "We take care of everything: design, text, layout and the technical setup. You only tell us what matters for {{business}} and give feedback on the first version.",
+    "",
+    "Would it be useful if I sent you two or three ideas for {{business}}, without any obligation?",
+  ].join("\n"),
+  tpl2Name: "More enquiries",
+  tpl2Subject: "more enquiries for {{business}}",
+  tpl2Body: [
+    "Hello {{contact|there}},",
+    "",
+    "I'm getting in touch with {{business}} to introduce {{my_business}}. We design websites for local businesses that help turn visitors into calls, messages and bookings.",
+    "",
+    "A typical site we build has a clear page about your services, your opening hours and location, an easy contact or booking button on phones, and simple updates whenever you need them.",
+    "",
+    "If it helps, I can prepare a short example of how a page for {{business}} could look. Would that be interesting for you?",
+  ].join("\n"),
+  tpl3Name: "Short and direct",
+  tpl3Subject: "website for {{business}}",
+  tpl3Body: [
+    "Hello {{contact|there}},",
+    "",
+    "This is {{my_business}}. We create websites for small businesses that look professional, work well on phones and make it easy for new customers to get in touch.",
+    "",
+    "The process is simple: a short call to understand what you offer, a first design you can review, and changes until you are happy with it. You don't need any technical knowledge.",
+    "",
+    "If a new or refreshed website is on your list this year, would you like me to share a few examples of our recent work?",
+  ].join("\n"),
 };
 
 export async function getSettings(): Promise<Settings> {

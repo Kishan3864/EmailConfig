@@ -21,8 +21,10 @@ export function imapClient(s: Settings) {
   });
 }
 
+/** The name every lead sees in the inbox: Settings "From name", else the business name (e.g. Brighton Solution), else the sender. */
 export function fromHeader(s: Settings) {
-  return s.senderName ? { name: s.senderName, address: s.fromEmail } : s.fromEmail;
+  const name = (s.fromName || s.business || s.senderName || "").trim();
+  return name ? { name, address: s.fromEmail } : s.fromEmail;
 }
 
 type InlineAttachment = { filename: string; content: Buffer; contentType: string; cid: string; contentDisposition: "inline" };

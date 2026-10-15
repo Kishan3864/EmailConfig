@@ -6,6 +6,9 @@ import { getT } from "@/lib/i18n-server";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
+/** optional facts for the AI: trimmed, one line, length-capped */
+const clean = (v?: string, max = 120) => (v || "").replace(/\s+/g, " ").trim().slice(0, max) || null;
+
 export async function POST(req: Request) {
   const { t } = await getT();
   const { listName, sourceNote, rows } = (await req.json()) as { listName: string; sourceNote: string; rows: InRow[] };
@@ -21,6 +24,7 @@ export async function POST(req: Request) {
       b.set(list.collection("rows").doc(String(r.rowNo).padStart(6, "0")), {
         rowNo: r.rowNo, email: r.email || null, businessName: r.businessName || null, website: r.website || null, phone: r.phone || null,
         country: r.country || null, outcome: r.outcome, reason: r.reason || null, businessKey: r.businessKey || null,
+        contactName: clean(r.contactName), city: clean(r.city), category: clean(r.category), about: clean(r.about, 600), note: clean(r.note, 400),
       });
     }
     await b.commit();

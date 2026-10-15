@@ -1,9 +1,11 @@
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { getSettings, getState, type Settings } from "@/lib/settings";
 import { capFor } from "@/lib/schedule";
 import { signature } from "@/lib/compose";
 import { footer } from "@/lib/lang";
+import { fromHeader } from "@/lib/mailer";
+import { TEMPLATE_IDS, templateOf } from "@/lib/templates";
 import { fmt } from "@/lib/time";
 import type { T } from "@/lib/i18n";
 import { getT } from "@/lib/i18n-server";
@@ -14,6 +16,8 @@ import { Info } from "@/components/Info";
 import { Icon, type IconName } from "@/components/icons";
 import { ToastOnMount } from "@/components/toast";
 import { Badge, Callout, Field, NextStep, PageHeader, Section } from "@/components/ui";
+import { EXAMPLE_LEAD } from "./template-check";
+import { TemplateEditor } from "./TemplateEditor";
 
 // "Settings" reads the same in Hinglish and English
 export const metadata = { title: "Settings" };
@@ -22,7 +26,17 @@ export const metadata = { title: "Settings" };
 const DAYS: [string, string][] = [["Som", "Mon"], ["Mangal", "Tue"], ["Budh", "Wed"], ["Guru", "Thu"], ["Shukra", "Fri"], ["Shani", "Sat"], ["Ravi", "Sun"]];
 const AI_URLS = ["https://api.openai.com/v1", "https://api.groq.com/openai/v1", "https://openrouter.ai/api/v1"];
 // [section id, label]: the labels read the same in both languages
-const JUMP: [string, string][] = [["check", "Test"], ["mailbox", "Mailbox"], ["profile", "Profile"], ["offer", "Offer"], ["rules", "Rules"], ["ai", "AI"], ["dns", "DNS"]];
+const JUMP: [string, string][] = [["check", "Test"], ["mailbox", "Mailbox"], ["profile", "Profile"], ["offer", "Offer"], ["templates", "Templates"], ["rules", "Rules"], ["ai", "AI"], ["dns", "DNS"]];
+// Template placeholders (lib/templates.ts) and where their values come from
+const PLACEHOLDERS: { k: string; hi: string; en: string }[] = [
+  { k: "business", hi: "Business ka naam (CSV)", en: "Business name (CSV)" },
+  { k: "contact", hi: "Contact person ka naam (CSV)", en: "Contact person's name (CSV)" },
+  { k: "city", hi: "City (CSV)", en: "City (CSV)" },
+  { k: "category", hi: "Business ka type, jaise restaurant (CSV)", en: "Type of business, e.g. restaurant (CSV)" },
+  { k: "country", hi: "Desh (CSV)", en: "Country (CSV)" },
+  { k: "my_name", hi: "Aapka Naam (Sender profile)", en: "Your Name (Sender profile)" },
+  { k: "my_business", hi: "Aapka Business (Sender profile)", en: "Your Business (Sender profile)" },
+];
 const TEST_BTN = "btn h-auto min-h-9 w-full justify-start whitespace-normal py-2 text-left leading-tight";
 const SUBHEAD = "mb-3 flex items-center gap-1.5 text-2xs font-bold uppercase tracking-wider text-slate-400";
 const CODE = "rounded bg-slate-100 px-1 font-mono text-2xs text-slate-600";
@@ -133,6 +147,11 @@ export default async function SettingsPage() {
   const planCap = Math.floor(s.planDailyLimit * 0.4);
   const ramp = rampOf(s);
   const sig = signature(s);
+  // the name every lead sees in the inbox, by the mailer's own rule: From name, else Business, else Name
+  const from = fromHeader(s);
+  const inboxName = typeof from === "string" ? "" : from.name;
+  // Name = Business makes "I'm X from X" in templates and AI mails (the inbox name no longer needs Name for that)
+  const sameName = !!s.senderName.trim() && s.senderName.trim().toLowerCase() === s.business.trim().toLowerCase();
   const okText = t("theek hai", "OK");
   const setText = t("set hai", "set");
 
@@ -153,7 +172,7 @@ export default async function SettingsPage() {
           "Pehli baar setup:\n1. Neeche Mailbox aur Sender profile bharo.\n2. Neeche wali bar mein 'Settings save karo' dabao.\n3. Phir 'Test mail mujhe bhejo' aur 'DNS check karo' dabao.\nPasswords yahan nahi daalte, wo server ki .env file mein rehte hain.",
           "First-time setup:\n1. Fill in Mailbox and Sender profile below.\n2. Click 'Save settings' in the bar at the bottom.\n3. Then click 'Send test mail to me' and 'Check DNS'.\nPasswords are not entered here; they live in the server's .env file.",
         )}
-        sub={t("Mailbox, signature, sending rules, AI aur DNS: sab yahin set hota hai.", "Mailbox, signature, sending rules, AI and DNS: all set up here.")}
+        sub={t("Mailbox, signature, email templates, sending rules, AI aur DNS: sab yahin set hota hai.", "Mailbox, signature, email templates, sending rules, AI and DNS: all set up here.")}
         actions={
           // phones: a 4-column grid, so every part (DNS too) is visible without sideways scrolling
           <nav aria-label={t("Settings ke hisse", "Settings sections")} className="seg scrollbar-none max-sm:grid max-sm:w-full max-sm:grid-cols-4">
@@ -342,20 +361,40 @@ export default async function SettingsPage() {
 
             <Section id="profile" className="scroll-mt-20" icon="user" title="Sender profile (signature)"
               info={t(
-                "Har mail ke neeche signature aur footer app khud lagata hai, AI nahi. Yahan wahi bharo jo leads ko dikhna chahiye. Neeche preview mein dekho mail ke end mein kya jaata hai.",
-                "The app adds the signature and footer under every mail itself, not the AI. Fill in what leads should see. The preview below shows what goes at the end of each mail.",
+                "Har mail ke neeche signature aur footer app khud lagata hai, AI nahi. Yahan wahi bharo jo leads ko dikhna chahiye. ‘Inbox mein naam’ wo naam hai jisse har lead ko mail inbox aur notification mein dikhti hai. Neeche preview mein dekho mail ke end mein kya jaata hai.",
+                "The app adds the signature and footer under every mail itself, not the AI. Fill in what leads should see. ‘Name in the inbox’ is the name every lead sees the mail from in their inbox and notifications. The preview below shows what goes at the end of each mail.",
               )}
-              sub={t("Har mail ke neeche yahi signature lagta hai", "This signature goes under every mail")}>
+              sub={t("Inbox mein dikhne wala naam aur har mail ke neeche ka signature", "The name shown in the inbox and the signature under every mail")}>
               <div className="space-y-4">
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label={t("Naam", "Name")} info={t("Signature ki pehli line. Inbox mein 'From' ke saath bhi yahi naam dikhta hai.", "The first line of the signature. The inbox also shows this name next to 'From'.")}
-                    hint={req(t, s.senderName, t("From ke saath dikhta hai", "Shown next to From"))}>
-                    <Txt name="senderName" value={s.senderName} warn={!s.senderName} />
+                  <Field label={t("Naam", "Name")} info={t(
+                    "Signature ki pehli line. Templates mein {{my_name}} isi se bharta hai. Inbox mein ye naam tabhi dikhta hai jab ‘Inbox mein naam’ aur Business dono khaali hon.",
+                    "The first line of the signature. In templates, {{my_name}} is filled with it. The inbox shows this name only when ‘Name in the inbox’ and Business are both empty.",
+                  )}
+                    hint={sameName
+                      ? <span className="text-amber-700">{t(
+                        `Naam aur Business same hain, isliye templates mein ‘I'm ${s.business.trim()} from ${s.business.trim()}’ banta hai. Yahan apna naam likho; inbox mein phir bhi ${inboxName} hi dikhega.`,
+                        `Name and Business are the same, so templates say ‘I'm ${s.business.trim()} from ${s.business.trim()}’. Put your own name here; the inbox still shows ${inboxName}.`,
+                      )}</span>
+                      : req(t, s.senderName, t("Signature ki pehli line", "First line of the signature"))}>
+                    <Txt name="senderName" value={s.senderName} warn={!s.senderName || sameName} />
                   </Field>
                   <Field label="Role" info={t("Signature mein naam ke neeche dikhta hai.", "Shown under the name in the signature.")} hint={t("Jaise: Web designer", "e.g. Web designer")}><Txt name="senderRole" value={s.senderRole} /></Field>
-                  <Field label="Business" info={t("Role ke saath dikhta hai. Khaali ho to AI aapko freelancer maan ke likhta hai.", "Shown next to the role. If empty, the AI writes as if you are a freelancer.")}
-                    hint={t("Khaali = freelance", "Empty = freelance")}><Txt name="business" value={s.business} /></Field>
-                  <Field label="Website" info={t("Signature mein aapki website ka link.", "A link to your website in the signature.")} hint={t("Jaise: https://aapki-site.com", "e.g. https://your-site.com")}><Txt name="website" value={s.website} plain mode="url" /></Field>
+                  <Field label="Business" info={t(
+                    "Aapki company ka naam, jaise Brighton Solution. Signature mein role ke saath dikhta hai aur templates mein {{my_business}} isi se bharta hai. ‘Inbox mein naam’ khaali ho to leads ko mail isi naam se dikhti hai. Khaali ho to AI aapko freelancer maan ke likhta hai.",
+                    "Your company's name, e.g. Brighton Solution. Shown next to the role in the signature, and {{my_business}} in templates is filled with it. When ‘Name in the inbox’ is empty, leads see the mail from this name. If empty, the AI writes as if you are a freelancer.",
+                  )}
+                    hint={t("Inbox ka default naam bhi yahi · khaali = freelance", "Also the default inbox name · empty = freelance")}><Txt name="business" value={s.business} /></Field>
+                  <Field label={t("Inbox mein naam (From name)", "Name in the inbox (From name)")} info={t(
+                    "Har lead ko inbox aur phone notification mein mail isi naam se dikhti hai, jaise ‘Brighton Solution’. Khaali chhodo to Business ka naam use hota hai; wo bhi khaali ho to aapka Naam. Mail ka address wahi From address rehta hai.",
+                    "Every lead sees the mail from this name in their inbox and phone notifications, e.g. ‘Brighton Solution’. Leave it empty to use the Business name; if that is empty too, your Name. The mail address stays the From address.",
+                  )}
+                    hint={inboxName
+                      ? t(<>Khaali = Business ka naam · Abhi inbox mein: <b className="font-semibold text-slate-600">{inboxName}</b></>, <>Empty = Business name · Inbox now shows: <b className="font-semibold text-slate-600">{inboxName}</b></>)
+                      : t("Khaali = Business ka naam", "Empty = Business name")}>
+                    <Txt name="fromName" value={s.fromName} placeholder={s.business || "Brighton Solution"} />
+                  </Field>
+                  <Field className="sm:col-span-2" label="Website" info={t("Signature mein aapki website ka link.", "A link to your website in the signature.")} hint={t("Jaise: https://aapki-site.com", "e.g. https://your-site.com")}><Txt name="website" value={s.website} plain mode="url" /></Field>
                 </div>
                 <Field label="Portfolio links" info={t("Signature mein website ke neeche dikhte hain. Ek line mein ek link.", "Shown under the website in the signature. One link per line.")} hint={t("Ek line mein ek link", "One link per line")}>
                   <textarea name="portfolio" defaultValue={s.portfolio} rows={3} className="input" {...PLAIN} />
@@ -414,6 +453,55 @@ export default async function SettingsPage() {
                 <Field label="Tone" info={t("Mail kis andaaz mein likhi jaaye.", "The style the mail should be written in.")} hint={t("Jaise: Friendly, short, honest, no hype", "e.g. Friendly, short, honest, no hype")}>
                   <textarea name="offerTone" defaultValue={s.offerTone} rows={2} className="input" />
                 </Field>
+              </div>
+            </Section>
+
+            <Section id="templates" className="scroll-mt-20 lg:col-span-2" icon="file" title="Email templates"
+              info={t(
+                "Teen fixed mails, jo campaign AI ki jagah use kar sakta hai: campaign banate waqt ‘Mail kaise banegi’ mein Template 1, 2 ya 3 chuno. Sabko same text jaata hai, har lead ke liye sirf placeholders (business ka naam, contact, city…) bharte hain. Template mails bhi same rules aur same approval se guzarti hain. Badalne ke baad ‘Settings save karo’ dabao: nayi drafts naye text se banengi, pehle bani drafts nahi badalti.",
+                "Three fixed mails a campaign can use instead of the AI: choose Template 1, 2 or 3 under ‘How mails are written’ when you create a campaign. Everyone gets the same text; for each lead only the placeholders (business name, contact, city…) are filled in. Template mails go through the same rules and the same approval. After a change, click ‘Save settings’: new drafts use the new text, drafts made earlier do not change.",
+              )}
+              sub={t("AI ki jagah fixed text: sabko same mail, sirf naam aur details badalti hain", "Fixed text instead of the AI: the same mail for everyone, only names and details change")}>
+              <div className="space-y-5">
+                <div className="grid gap-x-8 gap-y-5 rounded-lg border border-slate-200 bg-slate-50/60 p-3.5 md:grid-cols-2">
+                  <div className="min-w-0">
+                    <h3 className={SUBHEAD}><Icon name="list" size={12} />Placeholders
+                      <Info title="Placeholders" size={12} text={t(
+                        "Text ya subject mein ye likho, har lead ke liye app inki jagah lead ki detail bharta hai. CSV wali details import file se aati hain (jis lead ki detail nahi, uske liye khaali). Aapke naam aur business Sender profile se aate hain.",
+                        "Write these in the text or subject; for each lead the app puts the lead's detail in their place. The CSV details come from the import file (empty when a lead does not have them). Your name and business come from Sender profile.",
+                      )} />
+                    </h3>
+                    <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-3 gap-y-1.5 text-xs">
+                      {PLACEHOLDERS.map((p) => (
+                        <Fragment key={p.k}>
+                          <dt><code className={CODE}>{`{{${p.k}}}`}</code></dt>
+                          <dd className="min-w-0 text-slate-600">{t(p.hi, p.en)}</dd>
+                        </Fragment>
+                      ))}
+                    </dl>
+                    <p className="mt-3 border-t border-slate-200/80 pt-3 text-xs leading-relaxed text-slate-600">
+                      <code className={CODE}>{"{{x|text}}"}</code>
+                      {t(
+                        <>: lead ki detail khaali ho to ‘text’ aata hai. Jaise <code className={CODE}>{"Hello {{contact|there}},"}</code> → contact ho to <b className="font-medium text-slate-800">Hello {EXAMPLE_LEAD.contactName},</b> warna <b className="font-medium text-slate-800">Hello there,</b></>,
+                        <>: when the lead has no value, ‘text’ is used. E.g. <code className={CODE}>{"Hello {{contact|there}},"}</code> → <b className="font-medium text-slate-800">Hello {EXAMPLE_LEAD.contactName},</b> with a contact, otherwise <b className="font-medium text-slate-800">Hello there,</b></>,
+                      )}
+                    </p>
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className={SUBHEAD}><Icon name="check-check" size={12} />{t("Rules (har mail pe check)", "Rules (checked on every mail)")}</h3>
+                    <ul className="list-disc space-y-1.5 pl-4 text-xs leading-relaxed text-slate-600 marker:text-slate-300">
+                      <li>{t("60 se 110 words (placeholders bharne ke baad)", "60 to 110 words (after the placeholders are filled in)")}</li>
+                      <li>{t("Aakhir mein ek sawaal (?), jaise ‘Would it help if I sent you a few ideas?’", "End with a question (?), e.g. ‘Would it help if I sent you a few ideas?’")}</li>
+                      <li>{t("Text mein koi link ya website address nahi (link sirf signature mein aata hai)", "No links or web addresses in the text (links only go in the signature)")}</li>
+                      <li>{t("CAPS wale shabd, ‘urgent’, ‘guarantee’, ‘100%’, ‘!!’ aur HTML nahi", "No ALL CAPS words, ‘urgent’, ‘guarantee’, ‘100%’, ‘!!’ or HTML")}</li>
+                      <li>{t("Subject 90 akshar tak, ‘Re:’ ya ‘Fwd:’ ke bina", "Subject up to 90 characters, without ‘Re:’ or ‘Fwd:’")}</li>
+                      <li>{t("Campaign ki bhasha mein likho: French campaign ke liye French text, warna draft fail hota hai", "Write it in the campaign's language: French text for a French campaign, otherwise the draft fails")}</li>
+                      <li>{t("Signature aur footer mat likho: app unhe Sender profile se khud lagata hai", "Do not write a signature or footer: the app adds them from Sender profile")}</li>
+                      <li>{t("Sirf wahi likho jo har lead ke liye sach ho: ‘maine aapki website dekhi’ jaisi lines nahi", "Write only what is true for every lead: no lines like ‘I looked at your website’")}</li>
+                    </ul>
+                  </div>
+                </div>
+                <TemplateEditor templates={TEMPLATE_IDS.map((id) => templateOf(s, id))} senderName={s.senderName} business={s.business} />
               </div>
             </Section>
 

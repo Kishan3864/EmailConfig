@@ -16,12 +16,15 @@ export async function GET(req: Request) {
   const msgs = new Map(rows<Message>(await C.messages.get()).map((m) => [m.id, m]));
   const camps = new Map(rows<Campaign>(await C.campaigns.get()).map((c) => [c.id, c.name]));
   const lists = new Map(rows<LeadList>(await C.lists.get()).map((l) => [l.id, l.name]));
-  const head = ["email", "business", "website", "phone", "country", "status", "list", "campaign", "subject", "sent_at", "smtp_response"];
+  const head = ["email", "business", "website", "phone", "country", "contact_name", "city", "category", "about", "note", "status", "list", "campaign", "subject", "sent_at", "smtp_response"];
   const lines = [
     head.join(","),
     ...leads.map((l) => {
       const m = msgs.get(l.id);
-      return [l.email, l.businessName, l.website, l.phone, l.country, l.status, lists.get(l.listId), l.campaignId ? camps.get(l.campaignId) : "", m?.subject, m?.sentAt, m?.smtpResponse].map(esc).join(",");
+      return [
+        l.email, l.businessName, l.website, l.phone, l.country, l.contactName, l.city, l.category, l.about, l.note,
+        l.status, lists.get(l.listId), l.campaignId ? camps.get(l.campaignId) : "", m?.subject, m?.sentAt, m?.smtpResponse,
+      ].map(esc).join(",");
     }),
   ];
   return new Response("﻿" + lines.join("\n"), {

@@ -2,6 +2,8 @@ import { C, nowIso, rows, type Campaign, type Lead } from "./fsdb";
 import { getSettings, getState, setState } from "./settings";
 import { fetchFacts, type Facts } from "./facts";
 import { generateDraft } from "./ai";
+import { fillTemplate, isTemplateId, templateOf, templateVars } from "./templates";
+import { validateDraft } from "./validate";
 import { log, event } from "./log";
 import { todayCap } from "./schedule";
 
@@ -18,18 +20,27 @@ export async function draftForLead(leadId: string): Promise<{ ok: boolean; error
   if ((await C.messages.doc(leadId).get()).exists) return { ok: true };
   const cd = await C.campaigns.doc(lead.campaignId).get();
   const campaign = { id: cd.id, ...cd.data() } as Campaign;
+  // a template campaign fills a fixed text from Settings; only AI campaigns need the homepage facts
+  const tpl = isTemplateId(campaign.mailType) ? templateOf(s, campaign.mailType) : null;
 
-  let facts: Facts;
-  if (lead.facts) facts = JSON.parse(lead.facts);
-  else {
-    facts = await fetchFacts(lead.website); // fetched once, then stored
-    await ld.ref.update({ facts: JSON.stringify(facts), factsAt: nowIso() });
+  let facts: Facts | null = null;
+  if (!tpl) {
+    if (lead.facts) facts = JSON.parse(lead.facts);
+    else {
+      facts = await fetchFacts(lead.website); // fetched once, then stored
+      await ld.ref.update({ facts: JSON.stringify(facts), factsAt: nowIso() });
+    }
   }
 
   const jobRef = C.draftJobs.doc(leadId);
   const job = await jobRef.get();
   try {
-    const d = await generateDraft(lead, facts, campaign.language, s);
+    let d: { subject: string; body: string; subjectEn: string | null; bodyEn: string | null; errors: string[] };
+    if (tpl) {
+      const vars = templateVars(lead, s);
+      const subject = fillTemplate(tpl.subject, vars), body = fillTemplate(tpl.body, vars);
+      d = { subject, body, subjectEn: null, bodyEn: null, errors: validateDraft(subject, body, campaign.language, lead.businessName || "") };
+    } else d = await generateDraft(lead, facts!, campaign.language, s);
     if (d.errors.length) throw new Error("validation: " + d.errors.join("; "));
     // create() fails if a message already exists -> never two messages for one lead
     await C.messages.doc(leadId).create({

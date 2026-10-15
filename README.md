@@ -82,6 +82,13 @@ npm run test:ledger indexes    # read-only: every indexed query the app uses
 
 Firestore indexes live in `firestore.indexes.json`. Deploy them with `npm run deploy:indexes` (indexes only; this never touches the website's security rules). If the website repo ever deploys indexes with `--force`, the `outreach_*` indexes are deleted and sending stops with errors (it does not send wrongly); re-run the command to restore them.
 
+## Leads file and how mails are written
+
+- **Columns** (names can differ; you match them on the Import page, which also has a sample CSV): `email` (required), `business_name`, `contact_name`, `website`, `city`, `country` (sets language and timezone), `category` (type of business), `about` (what they do), `note` (one true fact about them), `phone`. One address at a time: **Import → Add a single lead** (same checks as a file).
+- **AI mails** use only these facts plus the business's own website title/description. The AI never comments on the recipient's website and never guesses what a business does; without `category`/`about` the mail stays general. The Approve page shows exactly what the AI knew.
+- **Templates**: Settings → Email templates holds three fixed texts with placeholders (`{{business}}`, `{{contact|there}}`, `{{city|your area}}`, `{{category|small businesses}}`, `{{my_name}}`, `{{my_business}}`; the text after `|` is used when the lead has no value). A campaign uses either the AI or one template. Template mails pass the same checks and the same approval.
+- **Sender name**: every lead sees mails from Settings → "Name in the inbox (From name)", or the Business name when it is blank (e.g. "Brighton Solution").
+
 ## What goes out, and how to see it
 
 - **Approve page.** With "Approve every mail" on (Settings, on by default), every AI draft waits here. You see the full mail with signature and footer, the English translation, and the homepage facts the AI used. You can Approve it, edit it (the edit is checked by the same rules), write a new version, or Reject it (that lead is then never emailed). Only approved mails can be sent.

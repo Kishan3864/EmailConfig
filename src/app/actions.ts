@@ -11,6 +11,7 @@ import { addToLedger, importSentFolder } from "@/lib/ledger";
 import { log, event } from "@/lib/log";
 import { chat } from "@/lib/ai";
 import { validateDraft } from "@/lib/validate";
+import { MAIL_TYPES } from "@/lib/templates";
 import type { T } from "@/lib/i18n";
 import { getT } from "@/lib/i18n-server";
 
@@ -251,8 +252,10 @@ export async function importSentAction() {
 // ---------------- campaigns ----------------
 export async function createCampaign(fd: FormData) {
   const listId = String(fd.get("listId"));
+  const mailType = String(fd.get("mailType") || "ai");
   const ref = await C.campaigns.add({
     name: String(fd.get("name") || "Campaign"), listId, timezone: String(fd.get("timezone")), language: String(fd.get("language")),
+    mailType: (MAIL_TYPES as readonly string[]).includes(mailType) ? mailType : "ai",
     status: "draft", samplesApproved: false, createdAt: nowIso(),
   });
   // attach every unassigned lead of the list (ready or still needing review)

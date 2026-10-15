@@ -40,6 +40,33 @@ function wajah(reason: string, t: T) {
   return r ? t(r.hi, r.en) : reason;
 }
 
+/**
+ * Business cell: the name, then the facts from the file in small type (contact · city · type, then what they do and the
+ * true fact, cut to one line; the full text is in the tooltip). Besides their own website title / description, these are
+ * the only facts the AI may use about the business.
+ */
+function Details({ r, t }: { r: ImportRow; t: T }) {
+  const meta = ([[r.contactName, t("Contact ka naam", "Contact name")], [r.city, t("Shehar", "City")], [r.category, t("Business ka type", "Type of business")]] as const)
+    .filter(([v]) => v);
+  // one line each, at most 280px; on the phone cards they stay right-aligned like the other values
+  const small = "max-w-[280px] truncate text-xs max-md:ml-auto";
+  const line = (label: string, v?: string | null) => v && (
+    <div className={`${small} text-slate-400`} title={`${label}: ${v}`}><span className="text-slate-500">{label}:</span> {v}</div>
+  );
+  return (
+    <div className="min-w-0">
+      {r.businessName && <div>{r.businessName}</div>}
+      {meta.length > 0 && (
+        <div className={`${small} text-slate-500`} title={meta.map(([v, l]) => `${l}: ${v}`).join("\n")}>
+          {meta.map(([v], i) => <span key={i}>{i > 0 && <span className="text-slate-300"> · </span>}{v}</span>)}
+        </div>
+      )}
+      {line(t("Kya karta hai", "What they do"), r.about)}
+      {line(t("Sach baat", "True fact"), r.note)}
+    </div>
+  );
+}
+
 /** Phone version of a Stat tile: three fit in one row. */
 function MiniStat({ href, label, value, dot, info, on }: { href: string; label: string; value: number; dot: string; info: string; on: boolean }) {
   return (
@@ -204,7 +231,7 @@ export default async function ImportPreview({ params, searchParams }: { params: 
             `${plural(items.length, "row", "rows")} dikh rahi ${items.length === 1 ? "hai" : "hain"}${items.length >= 1000 ? " (sirf pehli 1000)" : ""}`,
             `Showing ${plural(items.length, "row", "rows")}${items.length >= 1000 ? " (first 1000 only)" : ""}`,
           )}
-          info={done
+          info={(done
             ? t(
               "File ki har row aur uska import result. Ready = Ready status mein add hua, Review = 'Review chahiye' mein add hua, Skip = add nahi hua.\nTabs se filter karo. Ek baar mein max 1000 rows dikhti hain.",
               "Every row of the file and its import result. Ready = added with the Ready status, Review = added as 'Needs review', Skip = not added.\nFilter with the tabs. At most 1000 rows are shown at a time.",
@@ -212,7 +239,10 @@ export default async function ImportPreview({ params, searchParams }: { params: 
             : t(
               "File ki har row aur uska result. Bhejenge = add hoke campaign mein jayega, Review = aapke approval ke baad, Skip = add nahi hoga.\nTabs se filter karo. Ek baar mein max 1000 rows dikhti hain.",
               "Every row of the file and its result. Will send = added and goes into a campaign, Review = only after your approval, Skip = not added.\nFilter with the tabs. At most 1000 rows are shown at a time.",
-            )}
+            )) + t(
+            "\nBusiness ke neeche file se aayi baatein dikhti hain: contact, shehar, type, kya karta hai aur sach baat. AI business ke baare mein sirf yahi (aur unki website ka apna title/description) use karta hai.",
+            "\nUnder the business name you see the facts from the file: contact, city, type, what they do and the true fact. About the business, the AI uses only these (and their website's own title and description).",
+          )}
           actions={<div className="max-sm:hidden">{tabBar}</div>}>
           {/* phones: the tabs get a row of their own; next to the title they squeeze it to one word per line */}
           <div className="border-b border-slate-100 px-4 py-2.5 sm:hidden">{tabBar}</div>
@@ -228,7 +258,7 @@ export default async function ImportPreview({ params, searchParams }: { params: 
                       <td data-label={t("Wajah", "Reason")} className="text-xs text-slate-500" title={r.reason || undefined}>{r.reason ? wajah(r.reason, t) : r.outcome === "send" ? t("Saare checks pass", "Passed all checks") : null}</td>
                       {/* only the stacked phone cards may break an address anywhere; in the desktop table it would squeeze the column */}
                       <td data-label="Email" className="font-medium text-slate-900 max-md:[overflow-wrap:anywhere]">{r.email}</td>
-                      <td data-label="Business">{r.businessName}</td>
+                      <td data-label="Business">{(r.businessName || r.contactName || r.city || r.category || r.about || r.note) && <Details r={r} t={t} />}</td>
                       <td data-label="Website">{r.website && <span className="block min-w-0 max-w-[220px] truncate" title={r.website}>{r.website}</span>}</td>
                       <td data-label={t("Desh", "Country")}>{r.country}</td>
                     </tr>

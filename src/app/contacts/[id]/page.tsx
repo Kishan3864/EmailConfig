@@ -7,10 +7,13 @@ import { Icon, type IconName } from "@/components/icons";
 import { Info } from "@/components/Info";
 import { ActionButton } from "@/components/ActionButton";
 import { ToastOnMount } from "@/components/toast";
-import { factChips, parseFacts } from "@/components/factChips";
+import { knownItems, parseFacts, siteNote } from "@/components/factChips";
 import { fmt } from "@/lib/time";
 import type { T } from "@/lib/i18n";
 import { getT } from "@/lib/i18n-server";
+import { knowsWhatTheyDo } from "@/lib/leadinfo";
+import { getSettings } from "@/lib/settings";
+import { isTemplateId, templateOf } from "@/lib/templates";
 import { approveLead, rejectLead, markCheckedSent, markCheckedNotSent } from "../../actions";
 
 export async function generateMetadata() {
@@ -42,6 +45,8 @@ const EV: Record<string, [Text, IconName, Tone]> = {
   auto_reply: [{ hi: "Auto-reply aaya", en: "Auto-reply received" }, "bot", "slate"],
   bounced: [{ hi: "Mail bounce hui", en: "Mail bounced" }, "x-circle", "red"],
 };
+// a draft in a template campaign: no AI involved (a lead's campaign, and so its mail type, never changes)
+const DRAFT_TPL: Text = { hi: "Draft bana (template se mail bani)", en: "Draft created (made from the template)" };
 const DOT: Record<Tone, string> = {
   slate: "bg-slate-100 text-slate-500", sky: "bg-sky-50 text-sky-600", amber: "bg-amber-50 text-amber-600", emerald: "bg-emerald-50 text-emerald-600",
   violet: "bg-violet-50 text-violet-600", red: "bg-red-50 text-red-600", orange: "bg-orange-50 text-orange-600", indigo: "bg-indigo-50 text-indigo-600",
@@ -115,8 +120,17 @@ function ledgerNote(status: string, manualCheck: boolean, t: T) {
   return t("Ab is address pe kabhi dobara mail nahi jayegi.", "This address will never be emailed again.");
 }
 
-/** Label + value. Phone: one row (label left, value right) like a native list. Bigger screens: label above value in a grid. */
-function Row({ label, children }: { label: string; children: ReactNode }) {
+/**
+ * Label + value. Phone: one row (label left, value right) like a native list. Bigger screens: label above value in a grid.
+ * wide: a longer text (e.g. "What they do"), label above it and the full grid width on every screen.
+ */
+function Row({ label, children, wide = false }: { label: string; children: ReactNode; wide?: boolean }) {
+  if (wide) return (
+    <div className="min-w-0 border-b border-slate-100 py-2.5 sm:col-span-2 sm:border-0 sm:py-0 md:col-span-3">
+      <div className="text-xs font-medium text-slate-400 sm:mb-0.5">{label}</div>
+      <div className="mt-1 min-w-0 whitespace-pre-line break-words text-sm text-slate-800 sm:mt-0">{children}</div>
+    </div>
+  );
   return (
     <div className="flex min-w-0 items-baseline justify-between gap-4 border-b border-slate-100 py-2.5 sm:block sm:border-0 sm:py-0">
       <div className="shrink-0 text-xs font-medium text-slate-400 sm:mb-0.5">{label}</div>
@@ -147,8 +161,8 @@ function nextFor(l: Lead, m: Mail | null, campHref: string, t: T): Next {
         href: "/campaigns", cta: t("Campaign mein daalo", "Add to a campaign") };
       // no draft yet: the Approve page has nothing for this contact, the campaign page shows whether it is running
       if (!m) return {
-        text: t("Campaign chalne pe AI iski mail likhega, phir wo Approve page pe aayegi. Campaign chal raha hai ya nahi, campaign page pe dekho.",
-          "While the campaign runs, the AI writes its mail, and then it appears on the Approve page. The campaign page shows whether the campaign is running."),
+        text: t("Campaign chalne pe iski mail banegi, phir wo Approve page pe aayegi. Campaign chal raha hai ya nahi, campaign page pe dekho.",
+          "While the campaign runs, its mail is written, and then it appears on the Approve page. The campaign page shows whether the campaign is running."),
         href: campHref, cta: t("Campaign kholo", "Open campaign") };
       if (m.status !== "ready") return {
         text: t("Is mail ko bhejne ka kaam chal raha hai. Worker apne aap try karega, result Bheji Gayi Mails mein dikhega.",
@@ -196,20 +210,32 @@ export default async function Contact({ params }: { params: Promise<{ id: string
   const ld = await C.leads.doc(id).get();
   if (!ld.exists) notFound();
   const l = { id, ...ld.data() } as Lead;
-  const [md, list, camp, ledger, replySnap, eventSnap, sendSnap] = await Promise.all([
+  const [md, list, camp, ledger, replySnap, eventSnap, sendSnap, s] = await Promise.all([
     C.messages.doc(id).get(), C.lists.doc(l.listId).get(), l.campaignId ? C.campaigns.doc(l.campaignId).get() : null, C.contacted.doc(key(l.email)).get(),
     C.replies.where("leadId", "==", id).get(), C.leads.doc(id).collection(EVENTS).orderBy("at").get(), C.sendLogs.where("leadId", "==", id).get(),
+    getSettings(),
   ]);
   const m = md.exists ? ({ id, ...md.data() } as Mail) : null;
   const replies = rows<Reply>(replySnap).sort((a, b) => a.receivedAt.localeCompare(b.receivedAt));
   const events = rows<EventRow>(eventSnap);
   const sends = rows<SendLog>(sendSnap).sort((a, b) => a.at.localeCompare(b.at));
   const ls = list.data() as LeadList | undefined;
-  const cn = camp?.exists ? (camp.data() as Campaign).name : "—";
+  const cd = camp?.exists ? (camp.data() as Campaign) : null;
+  const cn = cd ? cd.name : "—";
   const campHref = l.campaignId && camp?.exists ? `/campaigns/${l.campaignId}` : "/campaigns";
   const lg = ledger.exists ? { status: String(ledger.get("status") || ""), at: ledger.get("at") as string | undefined } : null;
-  const facts = l.facts ? factChips(parseFacts(l.facts), lang) : [];
   const serverReply = t("Server ka jawab:", "Server reply:");
+
+  // a template campaign fills a fixed text, so the AI never writes this lead's mail
+  const tpl = cd && isTemplateId(cd.mailType) ? templateOf(s, cd.mailType) : null;
+  const tplName = tpl ? (tpl.name || "").trim() || `Template ${tpl.id.slice(3)}` : "";
+  // what the AI may say about this lead: the same list the AI gets (knownFacts in lib/leadinfo.ts)
+  const facts = parseFacts(l.facts);
+  const known = knownItems(l, facts, lang);
+  const siteLine = siteNote(l.website, facts, lang);
+  const siteLater = !facts && !!l.website?.trim(); // the website is read before the first AI draft
+  const guessed = !knowsWhatTheyDo(known) && !siteLater;
+  const val = (v?: string | null) => (v || "").trim();
 
   const site = l.website?.trim() || "";
   const siteUrl = /^https?:\/\/\S+$/i.test(site) ? site : /^[a-z0-9-]+(\.[a-z0-9-]+)+(\/\S*)?$/i.test(site) ? `https://${site}` : null;
@@ -235,7 +261,7 @@ export default async function Contact({ params }: { params: Promise<{ id: string
   const items: Item[] = [
     ...events.map((e): Item => {
       const raw = e.type.replace(/_/g, " ");
-      const [text, icon, tone]: [Text, IconName, Tone] = EV[e.type] || [{ hi: raw, en: raw }, "dot", "slate"];
+      const [text, icon, tone]: [Text, IconName, Tone] = e.type === "draft" && tpl ? [DRAFT_TPL, "pencil", "slate"] : EV[e.type] || [{ hi: raw, en: raw }, "dot", "slate"];
       return { k: "e" + e.id, at: e.at, label: t(text.hi, text.en), icon, tone, ...eventDetail(e, t) };
     }),
     ...loneSends.map((s): Item => ({
@@ -249,8 +275,8 @@ export default async function Contact({ params }: { params: Promise<{ id: string
       <PageHeader
         title={l.businessName || l.email}
         back={{ href: "/contacts", label: "Contacts" }}
-        info={t("Is contact ki poori kahani ek jagah: basic jaankari, AI ki likhi mail, aaye hue jawab aur har step ki history. Agar upar koi laal ya peela box dikhe to pehle wahi kaam karo.",
-          "This contact's whole story in one place: basic details, the AI-written mail, replies received and the history of every step. If there is a red or yellow box at the top, deal with that first.")}
+        info={t("Is contact ki poori kahani ek jagah: basic jaankari, AI ko iske baare mein kya pata hai, iski mail, aaye hue jawab aur har step ki history. Agar upar koi laal ya peela box dikhe to pehle wahi kaam karo.",
+          "This contact's whole story in one place: basic details, what the AI knows about it, its mail, replies received and the history of every step. If there is a red or yellow box at the top, deal with that first.")}
         sub={<span className="flex flex-wrap items-center gap-x-2 gap-y-1">{l.businessName && <span className="break-all">{l.email}</span>}<Badge v={l.status} /></span>}
       />
 
@@ -292,10 +318,11 @@ export default async function Contact({ params }: { params: Promise<{ id: string
       )}
 
       <Section title={t("Jaankari", "Details")} icon="user"
-        info={t("Is lead ki basic jaankari jo import ke waqt aayi thi: business, email, website, phone, desh, kis list se aaya aur kis campaign mein hai. Neeche ledger batata hai ki is address ko kabhi mail gayi hai ya nahi.",
-          "This lead's basic details from the import: business, email, website, phone, country, which list it came from and which campaign it is in. The ledger below shows whether this address was ever emailed.")}>
+        info={t("Is lead ki jaankari jo import ke waqt aayi thi: business, email, website, phone, desh, aur file mein ho to contact ka naam, shehar, business ka type, wo kya karte hain aur ek sach baat. Saath mein ye kis list se aaya aur kis campaign mein hai. Neeche ledger batata hai ki is address ko kabhi mail gayi hai ya nahi.",
+          "This lead's details from the import: business, email, website, phone, country and, when the file had them, the contact name, city, type of business, what they do and one true fact. Also which list it came from and which campaign it is in. The ledger below shows whether this address was ever emailed.")}>
         <div className="grid grid-cols-1 sm:grid-cols-2 sm:gap-x-6 sm:gap-y-4 md:grid-cols-3">
           <Row label="Business">{l.businessName || "—"}</Row>
+          {val(l.contactName) && <Row label={t("Contact ka naam", "Contact name")}>{val(l.contactName)}</Row>}
           <Row label="Email"><span className="break-all">{l.email}</span></Row>
           <Row label="Website">
             {siteUrl
@@ -304,6 +331,8 @@ export default async function Contact({ params }: { params: Promise<{ id: string
           </Row>
           <Row label="Phone">{l.phone || "—"}</Row>
           <Row label={t("Desh", "Country")}>{l.country || "—"}</Row>
+          {val(l.city) && <Row label={t("Shehar", "City")}>{val(l.city)}</Row>}
+          {val(l.category) && <Row label={t("Business ka type", "Type of business")}>{val(l.category)}</Row>}
           <Row label="List">
             {ls?.name || "—"}
             {ls?.sourceNote && <span className="mt-0.5 block text-xs text-slate-500">{t("Kahan se mile:", "Source:")} {ls.sourceNote}</span>}
@@ -311,6 +340,8 @@ export default async function Contact({ params }: { params: Promise<{ id: string
           <Row label="Campaign">{camp?.exists ? <Link href={`/campaigns/${l.campaignId}`} className="link">{cn}</Link> : cn}</Row>
           <Row label={t("Kab add hua", "Added")}>{fmt(l.createdAt)}</Row>
           <Row label={t("Last update", "Last updated")}>{fmt(l.updatedAt)}</Row>
+          {val(l.about) && <Row wide label={t("Kya karte hain", "What they do")}>{val(l.about)}</Row>}
+          {val(l.note) && <Row wide label={t("Sach baat", "True fact")}>{val(l.note)}</Row>}
           <div className="mt-3 flex min-w-0 items-start gap-3 rounded-lg border border-slate-200/70 bg-slate-50/70 px-3 py-2.5 sm:col-span-2 sm:mt-0 md:col-span-3">
             <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg ${lg ? "bg-emerald-50 text-emerald-600 ring-1 ring-inset ring-emerald-600/10" : "bg-slate-100 text-slate-400"}`}><Icon name="shield" size={16} /></span>
             <div className="min-w-0 flex-1">
@@ -331,19 +362,52 @@ export default async function Contact({ params }: { params: Promise<{ id: string
         </div>
       </Section>
 
-      {l.facts && (
-        <Section title="Homepage facts" icon="globe" sub={t(`Check kiya: ${fmt(l.factsAt)}`, `Checked: ${fmt(l.factsAt)}`)}
-          info={t("Homepage ki technical baatein: title, description, HTTPS, mobile pe theek dikhti hai ya nahi, load time, menu/booking/order link, footer ka saal. AI inhi se mail personal banata hai.",
-            "Technical facts from the homepage: title, description, HTTPS, whether it looks right on mobile, load time, menu/booking/order links and the footer year. The AI uses them to make the mail personal.")}>
-          <div className="flex flex-wrap gap-1.5">
-            {facts.map((f, j) => <span key={j} className="max-w-full break-words rounded-md bg-slate-50 px-2 py-0.5 text-xs text-slate-700 ring-1 ring-inset ring-slate-200">{f}</span>)}
-          </div>
-          <details className="group mt-3">
-            <summary className="inline-flex cursor-pointer select-none items-center gap-1 text-xs font-medium text-slate-400 transition hover:text-slate-700">
-              <Icon name="chevron-right" size={13} className="transition group-open:rotate-90" />{t("Technical detail", "Technical details")}
-            </summary>
-            <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200/70 bg-slate-50 p-3 font-mono text-xs leading-relaxed text-slate-700">{pretty(l.facts)}</pre>
-          </details>
+      {!tpl && (
+        <Section title={t("AI ko kya pata hai", "What the AI knows")} icon="bot"
+          sub={l.factsAt ? t(`Website check hui: ${fmt(l.factsAt)}`, `Website checked: ${fmt(l.factsAt)}`) : undefined}
+          info={t("AI is lead ke baare mein mail mein sirf yahi baatein likh sakta hai: import file ki jaankari, aur unki apni website ka title / description (sirf ye samajhne ke liye ki wo kya karte hain). AI website pe kabhi comment nahi karta aur jo yahan nahi hai uska andaza nahi lagata. Behtar mail ke liye import file mein contact ka naam, shehar, business ka type, wo kya karte hain aur ek sach baat do.",
+            "These are the only points the AI may write about this lead: the details from the import file, and their own website title / description (only to understand what they do). The AI never comments on the website and never guesses anything that is not listed here. For better mails, put the contact name, city, type of business, what they do and one true fact in the import file.")}>
+          {known.length ? (
+            <dl className="grid gap-y-2.5 sm:grid-cols-[auto_minmax(0,1fr)] sm:gap-x-6 sm:gap-y-2">
+              {known.map((k) => (
+                <div key={k.key} className="min-w-0 sm:contents">
+                  <dt className="text-xs font-medium text-slate-400 sm:whitespace-nowrap sm:pt-0.5">{k.label}</dt>
+                  <dd className="mt-0.5 min-w-0 break-words text-sm text-slate-800 sm:mt-0">{k.value}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : (
+            <p className="text-sm text-slate-500">
+              {t("Email address ke siwa AI ko is lead ke baare mein kuch nahi pata, isliye mail general rahegi.", "Apart from the email address, the AI knows nothing about this lead, so the mail stays general.")}
+            </p>
+          )}
+          {(siteLine || guessed) && (
+            <div className="mt-3 space-y-1 border-t border-slate-100 pt-3 text-xs">
+              {siteLine && (
+                <p className="flex items-start gap-1.5 text-slate-500">
+                  <Icon name="globe" size={12} className="mt-0.5 shrink-0 text-slate-400" />
+                  <span className="min-w-0 break-words">
+                    {siteLine}{siteLater && t(". AI ki pehli draft se pehle uska title aur description padha jayega.", ". Its title and description are read before the first AI draft.")}
+                  </span>
+                </p>
+              )}
+              {guessed && (
+                <p className="flex items-start gap-1.5 text-amber-700">
+                  <Icon name="alert" size={12} className="mt-0.5 shrink-0" />
+                  <span className="min-w-0">{t("Ye nahi pata ki ye business kya karta hai, isliye AI unke kaam ke baare mein kuch nahi likhta.", "It is not known what this business does, so the AI writes nothing about their work.")}</span>
+                </p>
+              )}
+            </div>
+          )}
+          {l.facts && (
+            <details className="group mt-3">
+              <summary className="inline-flex cursor-pointer select-none items-center gap-1 text-xs font-medium text-slate-400 transition hover:text-slate-700">
+                <Icon name="chevron-right" size={13} className="transition group-open:rotate-90" />{t("Technical detail", "Technical details")}
+              </summary>
+              <p className="mt-2 text-xs text-slate-500">{t("Website check ka raw data. AI ko isme se sirf title aur description milte hain.", "Raw data from the website check. The AI gets only the title and description from it.")}</p>
+              <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200/70 bg-slate-50 p-3 font-mono text-xs leading-relaxed text-slate-700">{pretty(l.facts)}</pre>
+            </details>
+          )}
         </Section>
       )}
 
@@ -356,9 +420,12 @@ export default async function Contact({ params }: { params: Promise<{ id: string
             {m.dryRunDone && <Badge v="dry-run" label={t("Dry-run mein gayi", "Sent in dry-run")} dot={false} />}
           </>
         ) : undefined}
-        sub={m ? `${t("Bhasha", "Language")}: ${m.language || "—"} · ${m.sentAt ? t(`Bheji gayi: ${fmt(m.sentAt)}`, `Sent: ${fmt(m.sentAt)}`) : m.status === "retry" && m.nextAttemptAt ? t(`Agli koshish: ${fmt(m.nextAttemptAt)}`, `Next attempt: ${fmt(m.nextAttemptAt)}`) : t("Abhi bheji nahi gayi", "Not sent yet")}` : undefined}
-        info={t("Is lead ke liye AI ki likhi mail. Har lead ko sirf ek hi mail jaati hai. 'Approval baaki' = Approve page pe aapka intezaar; 'Approve ho gayi' = sending window mein apne aap jayegi. English translation sirf aapke padhne ke liye hai, lead ko original bhasha wali mail hi jaati hai.",
-          "The mail the AI wrote for this lead. Each lead gets only one mail. 'Awaiting approval' = waiting for you on the Approve page; 'Approved' = goes out automatically in the sending window. The English translation is only for you to read; the lead gets the mail in the original language.")}>
+        sub={m ? `${tpl ? `${t(`Template se bani: ${tplName}`, `Written from template: ${tplName}`)} · ` : ""}${t("Bhasha", "Language")}: ${m.language || "—"} · ${m.sentAt ? t(`Bheji gayi: ${fmt(m.sentAt)}`, `Sent: ${fmt(m.sentAt)}`) : m.status === "retry" && m.nextAttemptAt ? t(`Agli koshish: ${fmt(m.nextAttemptAt)}`, `Next attempt: ${fmt(m.nextAttemptAt)}`) : t("Abhi bheji nahi gayi", "Not sent yet")}` : undefined}
+        info={tpl
+          ? t(`Is lead ke liye template (${tplName}) se bani mail: is campaign mein AI mail nahi likhta. Har lead ko sirf ek hi mail jaati hai. 'Approval baaki' = Approve page pe aapka intezaar; 'Approve ho gayi' = sending window mein apne aap jayegi.`,
+            `The mail made from the template (${tplName}) for this lead: in this campaign the AI does not write the mails. Each lead gets only one mail. 'Awaiting approval' = waiting for you on the Approve page; 'Approved' = goes out automatically in the sending window.`)
+          : t("Is lead ke liye AI ki likhi mail. Har lead ko sirf ek hi mail jaati hai. 'Approval baaki' = Approve page pe aapka intezaar; 'Approve ho gayi' = sending window mein apne aap jayegi. English translation sirf aapke padhne ke liye hai, lead ko original bhasha wali mail hi jaati hai.",
+            "The mail the AI wrote for this lead. Each lead gets only one mail. 'Awaiting approval' = waiting for you on the Approve page; 'Approved' = goes out automatically in the sending window. The English translation is only for you to read; the lead gets the mail in the original language.")}>
         {m ? (
           <div className={`grid gap-4 ${m.bodyEn ? "md:grid-cols-2" : ""}`}>
             <MailPreview label={t("Mail ka text", "Mail text")} subject={m.subject} text={m.body}
@@ -369,8 +436,11 @@ export default async function Contact({ params }: { params: Promise<{ id: string
           </div>
         ) : (
           <p className="text-sm text-slate-500">
-            {t("Is contact ke liye abhi mail nahi bani. Campaign chalne pe AI iski mail likhega aur wo Approve page pe aayegi.",
-              "No mail has been written for this contact yet. While the campaign runs, the AI writes its mail and it appears on the Approve page.")}
+            {tpl
+              ? t(`Is contact ke liye abhi mail nahi bani. Campaign chalne pe iski mail template (${tplName}) se banegi aur Approve page pe aayegi.`,
+                `No mail has been made for this contact yet. While the campaign runs, its mail is made from the template (${tplName}) and appears on the Approve page.`)
+              : t("Is contact ke liye abhi mail nahi bani. Campaign chalne pe AI iski mail likhega aur wo Approve page pe aayegi.",
+                "No mail has been written for this contact yet. While the campaign runs, the AI writes its mail and it appears on the Approve page.")}
           </p>
         )}
       </Section>

@@ -1,26 +1,131 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useRef, useState, type DragEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Icon } from "@/components/icons";
 import { Info } from "@/components/Info";
 import { useT } from "@/components/lang";
 import { friendlyError, useToast } from "@/components/toast";
 import { Callout, EmptyState, Field, NextStep, PageHeader, Section, Steps, type StepState } from "@/components/ui";
+import type { InRow } from "@/lib/importer"; // type only: nothing of the server module reaches the browser
 
-type Row = { email?: string; businessName?: string; website?: string; phone?: string; country?: string; chain?: string };
+// the rows go to /api/import/preview as they are, so they have exactly the importer's keys (GUESS and FIELD_INFO must cover every one)
+type Row = Omit<InRow, "raw">;
+type Key = keyof Row;
 type HiEn = { hi: string; en: string };
-const FIELDS: [keyof Row, HiEn][] = [
-  ["email", { hi: "Email *", en: "Email *" }], ["businessName", { hi: "Business ka naam", en: "Business name" }], ["website", { hi: "Website", en: "Website" }],
-  ["phone", { hi: "Phone", en: "Phone" }], ["country", { hi: "Desh", en: "Country" }], ["chain", { hi: "Chain hai?", en: "Chain flag" }],
+const FIELDS: [Key, HiEn][] = [
+  ["email", { hi: "Email *", en: "Email *" }], ["businessName", { hi: "Business ka naam", en: "Business name" }], ["contactName", { hi: "Contact ka naam", en: "Contact name" }],
+  ["website", { hi: "Website", en: "Website" }], ["city", { hi: "Shehar", en: "City" }], ["country", { hi: "Desh", en: "Country" }],
+  ["category", { hi: "Business ka type", en: "Type of business" }], ["about", { hi: "Business kya karta hai", en: "What they do" }], ["note", { hi: "Ek sach baat", en: "One true fact" }],
+  ["phone", { hi: "Phone", en: "Phone" }], ["chain", { hi: "Chain hai?", en: "Chain flag" }],
+];
+const LABEL = Object.fromEntries(FIELDS) as Record<Key, HiEn>;
+
+// Column guessing works on the header without accents, in lower case. [strong, weak]: every field first tries its strong
+// pattern, and only then the weak one, so "Company" wins over "Name" or "Title".
+const GUESS: Record<Key, RegExp[]> = {
+  email: [/e-?mail|courriel|correo|mail/],
+  businessName: [/business|company|entreprise|societe|firma|empresa|negocio|brand/, /name|nom|title/],
+  contactName: [/contact|person|owner|first[ _-]?name|prenom|vorname|nombre|naam/],
+  website: [/web|site|url|domain/],
+  city: [/city|town|ville|stadt|ciudad|citta|shehar/],
+  country: [/country|pays|land/],
+  category: [/[ck]ategor|type|industry|niche|sector|secteur|activite|branche|rubro/],
+  about: [/about|descri|services|products|what(?!s?app)|activity/],
+  note: [/note|remark|comment|fact/],
+  phone: [/phone|(?:^|[^a-z])tel|mobile/],
+  chain: [/chain|chaine|franchise/],
+};
+// headers a field must never take, even when its pattern matches ("Contact email" is not a name, "Business type" is not the business)
+const NOT: Partial<Record<Key, RegExp>> = {
+  businessName: /mail|phone|web|site|url|type|[ck]ategor|descri|about|(?:last|full)[ _-]?name|surname|nachname|apellido|famille/,
+  contactName: /mail|phone|(?:^|[^a-z])tel|web|site|url|contacted|business|company|entreprise|societe|firma|empresa|negocio|last[ _-]?name|surname|nachname|apellido|famille/,
+  website: /descri|title|about/,
+  country: /landline/,
+};
+// guessing order: specific fields first, so "Contact name" goes to the contact and "Business type" to the type, not to the business name
+const ORDER: Key[] = ["email", "website", "contactName", "category", "about", "note", "city", "country", "phone", "businessName", "chain"];
+// fields that hold words: they never take a column of numbers or yes/no flags
+const TEXT: Key[] = ["businessName", "contactName", "city", "country", "category", "about", "note"];
+const plain = (h: unknown) => String(h ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+
+/**
+ * Guesses the file column of each field. Every field takes the first column that matches and is not taken yet.
+ * A column of email addresses only ever becomes the email; without an email header, the first column full of addresses is used.
+ */
+function guessColumns(headers: string[], rows: string[][]) {
+  const vals = (i: number) => rows.slice(0, 50).map((r) => String(r[i] ?? "").trim()).filter(Boolean);
+  const most = (i: number, re: RegExp) => { const v = vals(i); return v.length > 0 && v.filter((x) => re.test(x)).length * 2 > v.length; };
+  const emails = (i: number) => most(i, /@/);
+  const junk = (i: number) => most(i, /^(?:[\d\s.,:;\/+()%#*★-]+|yes|no|y|n|true|false|oui|non|ja|nein|si|x)$/i);
+  const fits = (f: Key, i: number) => (f === "email" ? !vals(i).length || emails(i) : !emails(i) && !(TEXT.includes(f) && junk(i)));
+  const m: Partial<Record<Key, number>> = {};
+  const free = (i: number) => !Object.values(m).includes(i);
+  for (const tier of [0, 1]) {
+    for (const f of ORDER) {
+      const re = GUESS[f][tier];
+      if (!re || m[f] !== undefined) continue;
+      const i = headers.findIndex((h, j) => free(j) && re.test(plain(h)) && !NOT[f]?.test(plain(h)) && fits(f, j));
+      if (i >= 0) m[f] = i;
+    }
+  }
+  if (m.email === undefined) {
+    const i = headers.findIndex((_, j) => free(j) && emails(j));
+    if (i >= 0) m.email = i;
+  }
+  return m;
+}
+
+// "CSV mein kya do": the columns of the sample CSV, in its order, with the first sample row as the example
+const CSV_COLS: { col: string; req?: true; what: HiEn }[] = [
+  { col: "email", req: true, what: { hi: "Jis address pe mail jayegi. Ek cell mein kai hon to app sabse achha khud chunta hai.", en: "The address the mail goes to. If a cell has several, the app picks the best one itself." } },
+  { col: "business_name", what: { hi: "Business ka naam. Mail mein aur template ke {{business}} mein aata hai.", en: "The business name. Used in the mail and in the template's {{business}}." } },
+  { col: "contact_name", what: { hi: "Owner ya manager ka pehla naam. Greeting mein (Hello Marco) aur {{contact}} mein.", en: "First name of the owner or manager. Used in the greeting (Hello Marco) and in {{contact}}." } },
+  { col: "website", what: { hi: "Ek business ko ek hi mail jaye. AI isse sirf samajhta hai ki business kya karta hai, website pe kabhi comment nahi karta.", en: "Makes sure a business gets only one mail. The AI only uses it to understand what they do and never comments on the website." } },
+  { col: "city", what: { hi: "Shehar. Mail mein aur {{city}} mein.", en: "The city. Used in the mail and in {{city}}." } },
+  { col: "country", what: { hi: "Desh. Isse campaign ki bhasha aur time zone ka suggestion milta hai; {{country}} mein bhi.", en: "The country. Suggests the campaign language and time zone; also {{country}}." } },
+  { col: "category", what: { hi: "Business ka type. Mail unke kaam ke hisaab se banti hai; {{category}} mein bhi.", en: "The type of business. Makes the mail fit their trade; also {{category}}." } },
+  { col: "about", what: { hi: "Business kya karta hai, aapke shabdon mein: services ya products.", en: "What they do, in your words: services or products." } },
+  { col: "note", what: { hi: "Ek sach baat jo aapne khud dekhi. AI ise ek baar, chhota sa use kar sakta hai.", en: "One true fact you checked yourself. The AI may mention it once, briefly." } },
+  { col: "phone", what: { hi: "Sirf aapke record ke liye. Mail mein use nahi hota.", en: "Only for your records. It is not used in the mail." } },
+];
+// example rows of the sample CSV; .example addresses have no mail server, so an unchanged sample can never be mailed
+const SAMPLE: string[][] = [
+  ["contact@trattoria-roma.example", "Trattoria Roma", "Marco", "trattoria-roma.example", "Lyon", "France", "Italian restaurant", "Fresh pasta, pizza and takeaway; private room for events", "4.8★ with 300 Google reviews", "+33 4 78 00 00 00"],
+  ["info@cabinet-sourire.example", "Cabinet Dentaire Sourire", "Claire", "cabinet-sourire.example", "Bordeaux", "France", "Dental clinic", "General dentistry, implants and teeth whitening", "Open on Saturdays", "+33 5 56 00 00 00"],
+  ["hello@greenleaf-yoga.example", "Greenleaf Yoga", "", "greenleaf-yoga.example", "Manchester", "United Kingdom", "Yoga studio", "Hot yoga and beginner classes, 7 days a week", "", "+44 161 000 0000"],
 ];
 
-const GUESS: Record<keyof Row, RegExp> = {
-  email: /e-?mail|courriel|mail/i, businessName: /business|company|name|nom|soci[ée]t[ée]|entreprise|title/i, website: /web|site|url|domain/i,
-  phone: /phone|t[ée]l|mobile/i, country: /country|pays|land/i, chain: /chain|cha[iî]ne|franchise/i,
+/** Builds the sample CSV in the browser (UTF-8 with BOM, so Excel shows ★ and accents) and downloads it. */
+function downloadSample() {
+  const cell = (v: string) => (/[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+  const csv = "﻿" + [CSV_COLS.map((c) => c.col), ...SAMPLE].map((r) => r.map(cell).join(",")).join("\r\n") + "\r\n";
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "sample-leads.csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+// "Ek lead add karo": one address, sent through the same preview as a file
+type OneKey = Exclude<Key, "phone" | "chain">;
+const ONE_EMPTY: Record<OneKey, string> = { email: "", businessName: "", contactName: "", website: "", city: "", country: "", category: "", note: "", about: "" };
+const ONE_PLACEHOLDER: Record<OneKey, HiEn> = {
+  email: { hi: "contact@business.fr", en: "contact@business.com" },
+  businessName: { hi: "Jaise Trattoria Roma", en: "E.g. Trattoria Roma" },
+  contactName: { hi: "Jaise Marco", en: "E.g. Marco" },
+  website: { hi: "Jaise trattoria-roma.fr", en: "E.g. trattoria-roma.com" },
+  city: { hi: "Jaise Lyon", en: "E.g. Lyon" },
+  country: { hi: "Jaise France", en: "E.g. France" },
+  category: { hi: "Jaise Italian restaurant", en: "E.g. Italian restaurant" },
+  note: { hi: "Jaise 4.8★ with 300 Google reviews", en: "E.g. 4.8★ with 300 Google reviews" },
+  about: { hi: "Jaise fresh pasta, takeaway aur events ke liye catering", en: "E.g. fresh pasta, takeaway and catering for events" },
 };
 
-const FIELD_INFO: Record<keyof Row, HiEn> = {
+const FIELD_INFO: Record<Key, HiEn> = {
   email: {
     hi: "Wo column jismein email address hain. Ye zaroori hai. Ek cell mein kai emails hon to app khud sabse achha chunta hai (contact@, info@ pehle; jobs@, privacy@ jaise role address nahi).",
     en: "The column with the email addresses. This is required. If a cell has several emails, the app picks the best one itself (contact@, info@ first; never role addresses like jobs@, privacy@).",
@@ -28,6 +133,26 @@ const FIELD_INFO: Record<keyof Row, HiEn> = {
   businessName: {
     hi: "Business ka naam. AI mail likhte waqt isko use karta hai. Column na ho to '— koi nahi —' rehne do.",
     en: "The business name. The AI uses it when writing the mail. If there is no such column, leave it at '— none —'.",
+  },
+  contactName: {
+    hi: "Kisi insaan ka pehla naam (owner ya manager), jaise Marco. Mail ki greeting mein use hota hai (Hello Marco) aur templates ke {{contact}} mein.\nPata na ho to khaali chhodo: tab greeting bina naam ke hoti hai, app naam ka andaza nahi lagata.",
+    en: "A person's first name (owner or manager), like Marco. It is used in the greeting of the mail (Hello Marco) and in the templates' {{contact}}.\nIf you don't know it, leave it empty: the greeting then has no name, the app never guesses one.",
+  },
+  city: {
+    hi: "Business ka shehar, jaise Lyon. AI ise mail mein use kar sakta hai, aur templates mein {{city}} isi se bharta hai.",
+    en: "The business's city, like Lyon. The AI may use it in the mail, and {{city}} in the templates is filled from it.",
+  },
+  category: {
+    hi: "Business ka type, jaise Italian restaurant ya dental clinic. Isse mail unke kaam ke hisaab se banti hai; templates mein {{category}}.\nYe aur 'Business kya karta hai' dono na hon (aur website se bhi pata na chale), to AI mail general rakhta hai, andaza nahi lagata.",
+    en: "The type of business, like Italian restaurant or dental clinic. It makes the mail fit their trade; in templates it is {{category}}.\nIf neither this nor 'What they do' is known (and their website does not say), the AI keeps the mail general and never guesses.",
+  },
+  about: {
+    hi: "Business kya karta hai, aapke shabdon mein: services ya products, jaise 'Fresh pasta, takeaway aur catering'.\nAI business ke baare mein sirf aapki di hui sach baatein (aur unki website ka apna title/description) use karta hai, andaza nahi lagata.",
+    en: "What the business does, in your words: services or products, like 'Fresh pasta, takeaway and catering'.\nAbout the business, the AI uses only the true facts you give (and their website's own title and description); it never guesses.",
+  },
+  note: {
+    hi: "Ek sach baat jo aapne khud dekhi ho, jaise '4.8★ with 300 Google reviews'. AI ise mail mein ek baar, chhota sa use kar sakta hai.\nSirf pakki baat likho: andaza ya tareef nahi.",
+    en: "One true fact you checked yourself, like '4.8★ with 300 Google reviews'. The AI may mention it once, briefly.\nWrite only what is certain: no guesses, no flattery.",
   },
   website: {
     hi: "Business ki website. Iske domain se pata chalta hai ki ek business ko ek hi mail jaye. Block list bhi isi se check hoti hai.",
@@ -44,6 +169,17 @@ const FIELD_INFO: Record<keyof Row, HiEn> = {
   chain: {
     hi: "Agar koi column batata hai ki business chain ya franchise hai (1, yes, oui, x), to wo rows skip hongi. Chain businesses ko cold mail nahi bhejte.",
     en: "If a column says the business is a chain or franchise (1, yes, oui, x), those rows are skipped. Chain businesses are never sent cold mail.",
+  },
+};
+// the single-lead form explains these two in its own words (FIELD_INFO talks about file columns); the others are the same
+const ONE_INFO: Partial<Record<OneKey, HiEn>> = {
+  email: {
+    hi: "Jis address pe mail jayegi. Wahi checks chalte hain jo file mein: format, MX record, role address (jaise jobs@), Ledger aur Block list.",
+    en: "The address the mail goes to. The same checks as for a file run: format, MX record, role address (like jobs@), Ledger and Block list.",
+  },
+  businessName: {
+    hi: "Business ka naam. AI aur templates ({{business}}) isko mail mein use karte hain.",
+    en: "The business name. The AI and the templates ({{business}}) use it in the mail.",
   },
 };
 
@@ -65,12 +201,17 @@ export default function ImportPage() {
   const [sourceNote, setSourceNote] = useState("");
   const [table, setTable] = useState<{ headers: string[]; rows: string[][] } | null>(null);
   const [extracted, setExtracted] = useState<Row[] | null>(null);
-  const [map, setMap] = useState<Partial<Record<keyof Row, number>>>({});
-  const [busy, setBusy] = useState<"" | "parse" | "preview">("");
+  const [map, setMap] = useState<Partial<Record<Key, number>>>({});
+  const [busy, setBusy] = useState<"" | "parse" | "preview" | "one">("");
   const [err, setErr] = useState<Problem | null>(null);
   const [drag, setDrag] = useState(false);
   const [reads, setReads] = useState(0); // bumps after every successful read, to bring step 2 into view
+  const [csvOpen, setCsvOpen] = useState(false); // phones: the column list of "CSV mein kya do" is folded until opened
+  const [one, setOne] = useState(ONE_EMPTY);
+  const [oneErr, setOneErr] = useState<{ title: string; text?: string; at: "email" | "source" | "server" } | null>(null);
   const sourceRef = useRef<HTMLInputElement>(null);
+  const oneEmailRef = useRef<HTMLInputElement>(null);
+  const oneSourceRef = useRef<HTMLInputElement>(null);
   const autoName = useRef(false); // listName came from the file name (not typed), so a new file may replace it
   const readNo = useRef(0); // bumps on every read and every input change, so a read that finishes late is ignored
 
@@ -126,8 +267,7 @@ export default function ImportPage() {
       if (j.kind === "table") {
         const headers = j.headers ?? [], rows = (j.rows ?? []) as string[][];
         setTable({ headers, rows }); setExtracted(null);
-        const m: Partial<Record<keyof Row, number>> = {};
-        for (const [f] of FIELDS) { const i = headers.findIndex((h) => GUESS[f].test(h)); if (i >= 0 && !Object.values(m).includes(i)) m[f] = i; }
+        const m = guessColumns(headers, rows);
         setMap(m);
         if (!rows.length) {
           toast.warning(t("File mein koi data row nahi mili", "No data rows found in the file"),
@@ -187,6 +327,51 @@ export default function ImportPage() {
     }
   }
 
+  // "Ek lead add karo": the same /api/import/preview as a file, with one row; the preview page then shows its checks and the confirm
+  async function addOne() {
+    const failOne = (at: "email" | "source" | "server", title: string, text?: string) => { setOneErr({ at, title, text }); toast.error(title, text); };
+    const row = Object.fromEntries(Object.entries(one).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v)) as Row;
+    if (!row.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) {
+      oneEmailRef.current?.focus();
+      return failOne("email", row.email ? t("Ye email sahi nahi lagta", "This email does not look right") : t("Email daalo", "Enter the email address"),
+        t("Jaise contact@business.fr. Sirf email zaroori hai, baaki jitna pata ho utna bharo.", "Like contact@business.com. Only the email is required; fill in whatever else you know."));
+    }
+    if (!sourceNote.trim()) {
+      oneSourceRef.current?.focus();
+      return failOne("source", t("Batao ye address kahan se mila", "Say where you found this address"),
+        t("Ye mail ke footer mein dikhta hai, jaise 'Google Maps'.", "It is shown in the mail footer, like 'Google Maps'."));
+    }
+    setOneErr(null); setBusy("one");
+    try {
+      // a typed list name is used; a name taken from the chosen file is not (that file is a different list)
+      const name = (!autoName.current && listName.trim()) || `Single: ${row.email}`;
+      const r = await fetch("/api/import/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ listName: name, sourceNote, rows: [row] }) });
+      const j = (await r.json().catch(() => ({}))) as { listId?: string; error?: string };
+      if (!r.ok || !j.listId) {
+        setBusy("");
+        return failOne("server", t("Preview nahi ban paya", "Could not build the preview"), j.error || t(`Server ne error diya (${r.status})`, `The server returned an error (${r.status})`));
+      }
+      toast.success(t("Preview taiyaar hai", "The preview is ready"), t("Result dekho, phir import confirm karo.", "Check the result, then confirm the import."));
+      router.push(`/import/${j.listId}`); // stays busy until the preview page opens, so a second click cannot create a second list
+    } catch (e) {
+      setBusy("");
+      failOne("server", t("Server se jawab nahi aaya", "No response from the server"), friendlyError(e, t));
+    }
+  }
+  const oneSet = (f: OneKey) => (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setOne((o) => ({ ...o, [f]: e.target.value }));
+  const oneField = (f: OneKey, className = "") => (
+    <Field key={f} className={className} label={LABEL[f][lang]} info={(ONE_INFO[f] || FIELD_INFO[f])[lang]}
+      hint={f === "email" && oneErr?.at === "email" ? <span className="text-red-600">{t("Sahi email address daalo", "Enter a valid email address")}</span> : undefined}>
+      {f === "about" ? (
+        <textarea className="input" rows={2} value={one.about} onChange={oneSet("about")} placeholder={ONE_PLACEHOLDER.about[lang]} />
+      ) : (
+        <input ref={f === "email" ? oneEmailRef : undefined} className={`input ${f === "email" && oneErr?.at === "email" ? "border-red-400 focus:border-red-500 focus:ring-red-500/10" : ""}`}
+          type={f === "email" ? "email" : "text"} inputMode={f === "email" ? "email" : undefined} autoComplete="off" spellCheck={f === "note" ? undefined : false}
+          value={one[f]} onChange={oneSet(f)} placeholder={ONE_PLACEHOLDER[f][lang]} />
+      )}
+    </Field>
+  );
+
   const parsed = !!table || !!extracted;
   const ready = (table?.rows.length || extracted?.length || 0) > 0; // something was read that can be checked
   // short labels on phones so all three steps fit on one line
@@ -204,6 +389,15 @@ export default function ImportPage() {
   // the source field, as the guidance texts point to it
   const whereFound = t(<b>Kahan se mile</b>, <b>where you found the addresses</b>);
   const readBtn = t(<b>File / text padho</b>, <b>Read file / text</b>);
+  const sampleBtn = (className: string) => (
+    <button type="button" className={`btn ${className}`} onClick={() => {
+      downloadSample();
+      toast.success(t("Sample CSV download ho gayi", "Sample CSV downloaded"),
+        t("Example rows hata ke apni rows daalo, phir upar upload karo.", "Replace the example rows with your own, then upload the file above."));
+    }}>
+      <Icon name="download" size={14} />{t("Sample CSV download karo", "Download sample CSV")}
+    </button>
+  );
 
   const previewBar = (note: string) => (
     <>
@@ -223,10 +417,10 @@ export default function ImportPage() {
       <PageHeader
         title={t("Leads import karo", "Import leads")}
         info={t(
-          "Yahan se leads ki list app mein lao: CSV, XLSX, PDF, TXT file ya seedha paste kiya text.\nHar address check hota hai: MX record, role address (jaise jobs@, privacy@), chain, Ledger aur Block list.\nKuch bhi turant add nahi hota. Pehle preview dikhta hai; aap confirm karoge tabhi leads Contacts mein jayenge.",
-          "Bring a list of leads into the app from here: a CSV, XLSX, PDF or TXT file, or pasted text.\nEvery address is checked: MX record, role address (like jobs@, privacy@), chain, Ledger and Block list.\nNothing is added right away. You see a preview first; leads go to Contacts only when you confirm.",
+          "Yahan se leads ki list app mein lao: CSV, XLSX, PDF, TXT file ya seedha paste kiya text. Sirf ek address ho to neeche 'Ek lead add karo' use karo.\nHar address check hota hai: MX record, role address (jaise jobs@, privacy@), chain, Ledger aur Block list.\nKuch bhi turant add nahi hota. Pehle preview dikhta hai; aap confirm karoge tabhi leads Contacts mein jayenge.\nFile mein kaun se columns do, ye neeche 'CSV mein kya do' mein hai.",
+          "Bring a list of leads into the app from here: a CSV, XLSX, PDF or TXT file, or pasted text. For just one address, use 'Add a single lead' below.\nEvery address is checked: MX record, role address (like jobs@, privacy@), chain, Ledger and Block list.\nNothing is added right away. You see a preview first; leads go to Contacts only when you confirm.\nWhich columns to put in the file is shown below under 'What to put in the CSV'.",
         )}
-        sub={t("File do, columns match karo, phir preview dekh ke confirm karo.", "Add a file, map the columns, then check the preview and confirm.")}
+        sub={t("File do (ya ek lead), columns match karo, phir preview dekh ke confirm karo.", "Add a file (or a single lead), map the columns, then check the preview and confirm.")}
       />
 
       <div className="space-y-4">
@@ -271,8 +465,12 @@ export default function ImportPage() {
 
         <Section title={t("File upload karo ya text paste karo", "Upload a file or paste text")} icon="upload"
           info={t(
-            "CSV ya XLSX mein pehli line column ke naam honi chahiye; agle step mein unhe match karoge.\nPDF, TXT ya paste kiye text se app khud emails, naam, website aur phone dhoondhta hai (andaze se).\nFile aur text dono do to sirf file padhi jayegi.",
-            "In a CSV or XLSX the first line must hold the column names; you map them in the next step.\nFrom a PDF, TXT or pasted text the app finds emails, names, websites and phones itself (best effort).\nIf you give both a file and text, only the file is read.",
+            "CSV ya XLSX mein pehli line column ke naam honi chahiye; agle step mein unhe match karoge. Kaun se columns dene hain, wo neeche 'CSV mein kya do' mein hai.\nPDF, TXT ya paste kiye text se app khud emails, naam, website aur phone dhoondhta hai (andaze se).\nFile aur text dono do to sirf file padhi jayegi.",
+            "In a CSV or XLSX the first line must hold the column names; you map them in the next step. Which columns to give is shown below under 'What to put in the CSV'.\nFrom a PDF, TXT or pasted text the app finds emails, names, websites and phones itself (best effort).\nIf you give both a file and text, only the file is read.",
+          )}
+          sub={t(
+            <>Kaun se columns dein: <a href="#csv-guide" onClick={() => setCsvOpen(true)} className="link">CSV mein kya do</a>. Sirf ek address hai? <a href="#one-lead" className="link">Ek lead add karo</a>.</>,
+            <>Which columns to give: <a href="#csv-guide" onClick={() => setCsvOpen(true)} className="link">What to put in the CSV</a>. Only one address? <a href="#one-lead" className="link">Add a single lead</a>.</>,
           )}>
           <label
             onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
@@ -341,8 +539,8 @@ export default function ImportPage() {
         {table && (
           <Section id="step2" className="scroll-mt-20" icon="sliders" title={t(`Columns match karo (${plural(table.rows.length, "row", "rows")})`, `Map columns (${plural(table.rows.length, "row", "rows")})`)}
             info={t(
-              "Batao file ka kaunsa column kya hai. App ne column ke naam dekh ke khud andaza lagaya hai; galat ho to badal do.\nSirf Email zaroori hai. Baaki column na hon to '— koi nahi —' rehne do.",
-              "Tell the app what each column of the file is. It has guessed from the column names; change anything that is wrong.\nOnly Email is required. If the other columns are missing, leave them at '— none —'.",
+              "Batao file ka kaunsa column kya hai. App ne column ke naam dekh ke khud andaza lagaya hai; galat ho to badal do.\nSirf Email zaroori hai. Baaki column na hon to '— koi nahi —' rehne do.\nBusiness ka type, 'kya karta hai' aur 'ek sach baat' wale columns hon to zaroor match karo: inse mail sabse specific banti hai.",
+              "Tell the app what each column of the file is. It has guessed from the column names; change anything that is wrong.\nOnly Email is required. If the other columns are missing, leave them at '— none —'.\nIf the file has columns for the type of business, what they do or a true fact, do map them: they make the mail the most specific.",
             )}
             sub={t("Har field ke saamne file ka sahi column chuno.", "For each field, choose the matching column of the file.")}>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -480,6 +678,95 @@ export default function ImportPage() {
             : t(<>List theek lag rahi hai? <b>Check karke preview dekho</b> dabao. Agle page pe har address ka result dikhega, aur wahin se import confirm hoga.</>,
               <>Does the list look fine? Press <b>Check & preview</b>. The next page shows the result for every address, and you confirm the import there.</>)} />
         )}
+
+        <Section id="csv-guide" icon="bulb" title={t("CSV mein kya do", "What to put in the CSV")}
+          info={t(
+            "File mein kaun se columns daalo, aur app unka kya karta hai. Pehli line mein column ke naam; har row ek business.\nColumn ke naam kisi bhi bhasha mein chalte hain, agle step mein match ho jaate hain. Sirf email zaroori hai.\nJo baat pakki pata na ho, wo cell khaali chhodo: AI har cell ko sach maanta hai, to galat baat seedhe mail mein jayegi.",
+            "Which columns to put in the file, and what the app does with them. Column names go in the first line; every row is one business.\nColumn names can be in any language; you match them in the next step. Only the email is required.\nIf you are not sure about something, leave that cell empty: the AI takes every cell as true, so a wrong value would go straight into the mail.",
+          )}
+          sub={t("Sirf email zaroori hai. Baaki jitna sach pata ho, utna do.", "Only the email is required. Add whatever else you know for sure.")}
+          // phones: the button gets a row of its own in the card; next to the title it squeezes it to one word per line
+          actions={<div className="max-sm:hidden">{sampleBtn("")}</div>}>
+          <Callout tone="info" title={t("Sabse achhi mail ke liye", "For the best mails")}>
+            {t(
+              <><b>category</b> + <b>about</b> + <b>note</b> se mail sabse specific banti hai. AI sirf yahi sach baatein use karta hai aur kabhi website pe comment nahi karta.</>,
+              <><b>category</b> + <b>about</b> + <b>note</b> make the mail the most specific. The AI uses only these true facts and never comments on the website.</>,
+            )}
+          </Callout>
+          <div className="sm:hidden">{sampleBtn("mt-3 h-10 w-full")}</div>
+          <button type="button" className="btn mt-2 w-full sm:mt-3 md:hidden" onClick={() => setCsvOpen(!csvOpen)} aria-expanded={csvOpen} aria-controls="csv-cols">
+            <Icon name="chevron-down" size={14} className={`transition ${csvOpen ? "rotate-180" : ""}`} />
+            {csvOpen ? t("Columns chhupao", "Hide the columns") : t(`Saare ${CSV_COLS.length} columns dekho`, `See all ${CSV_COLS.length} columns`)}
+          </button>
+          <div id="csv-cols" className={`mt-3 ${csvOpen ? "" : "max-md:hidden"}`}>
+            <div className="overflow-hidden rounded-lg border border-slate-200">
+              <div className="hidden grid-cols-[136px_minmax(0,1fr)_minmax(0,250px)] gap-4 border-b border-slate-200 bg-slate-50/70 px-3 py-2 text-2xs font-semibold uppercase tracking-wide text-slate-500 md:grid">
+                <span>Column</span><span>{t("Kis kaam aata hai", "What it is for")}</span><span>Example</span>
+              </div>
+              <ul className="divide-y divide-slate-100">
+                {CSV_COLS.map((c, i) => (
+                  <li key={c.col} className="grid gap-x-4 gap-y-0.5 px-3 py-2 md:grid-cols-[136px_minmax(0,1fr)_minmax(0,250px)] md:items-baseline">
+                    <span className="flex items-center gap-1.5">
+                      <code className="font-mono text-xs font-semibold text-slate-900">{c.col}</code>
+                      {c.req && <span className="rounded bg-red-50 px-1 text-2xs font-semibold text-red-600">{t("zaroori", "required")}</span>}
+                    </span>
+                    <span className="text-xs leading-relaxed text-slate-600">{c.what[lang]}</span>
+                    <span className="truncate text-xs text-slate-400" title={SAMPLE[0][i]}><span className="md:hidden">{t("Jaise", "E.g.")}: </span>{SAMPLE[0][i]}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <p className="hint">
+              {t(
+                "Column ke naam kisi bhi bhasha mein chalenge, agle step mein match kar sakte ho. Sample ki rows sirf example hain (.example address): unhe hata ke apni rows daalo.",
+                "Column names can be in any language; you match them in the next step. The sample rows are only examples (.example addresses): replace them with your own.",
+              )}
+            </p>
+          </div>
+        </Section>
+
+        <Section id="one-lead" icon="user" title={t("Ek lead add karo", "Add a single lead")}
+          info={t(
+            "Sirf ek address hai? Yahan bharo. Ye file jaisa hi chalta hai: wahi checks (MX record, role address, Ledger, Block list), phir preview page pe aap confirm karte ho.\nJitna sach pata ho utna bharo, baaki khaali chhodo. AI business ke baare mein sirf yahi baatein (aur unki website ka apna title/description) use karta hai.",
+            "Only one address? Fill it in here. It works just like a file: the same checks (MX record, role address, Ledger, Block list), then you confirm on the preview page.\nFill in what you know for sure and leave the rest empty. About the business, the AI uses only these facts (and their website's own title and description).",
+          )}
+          sub={t("Wahi checks aur preview jo file ke liye, bas file ke bina.", "The same checks and preview as for a file, just without one.")}>
+          <form noValidate onSubmit={(e) => { e.preventDefault(); addOne(); }}>
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+              {oneField("email")}
+              <Field label={t("Ye address kahan se mila? *", "Where did you find this address? *")}
+                info={t(
+                  "Upar 'List ki jaankari' wala hi field hai, dono jagah ek hi value rehti hai.\nYe mail ke footer mein sach-sach likha jata hai, jaise 'Google Maps' ya 'aapki website'.",
+                  "The same field as in 'List details' above; both places keep one value.\nIt is written truthfully in the mail footer, like 'Google Maps' or 'your website'.",
+                )}
+                hint={oneErr?.at === "source" && !sourceNote.trim()
+                  ? <span className="text-red-600">{t("Ye bharna zaroori hai: mail ke footer mein dikhta hai.", "This is required: it is shown in the mail footer.")}</span>
+                  : t("Mail ke footer mein dikhega.", "Shown in the mail footer.")}>
+                <input ref={oneSourceRef} className={`input ${oneErr?.at === "source" && !sourceNote.trim() ? "border-red-400 focus:border-red-500 focus:ring-red-500/10" : ""}`}
+                  value={sourceNote} onChange={(e) => setSourceNote(e.target.value)} placeholder={t("Jaise Google Maps", "E.g. Google Maps")} />
+              </Field>
+              {oneField("businessName")}
+              {oneField("contactName")}
+              {oneField("website")}
+              {oneField("city")}
+              {oneField("country")}
+              {oneField("category")}
+              {oneField("note", "md:col-span-2 lg:col-span-1")}
+              {oneField("about", "md:col-span-2 lg:col-span-3")}
+            </div>
+            {oneErr && <div className="mt-4"><Callout tone="danger" title={oneErr.title}>{oneErr.text}</Callout></div>}
+            <div className="mt-5 flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+              <p className="flex items-start gap-1.5 text-xs text-slate-500">
+                <Icon name="shield" size={14} className="mt-px text-slate-400" />
+                {t("Abhi kuch add nahi hoga: pehle checks aur preview, phir aap confirm karoge.", "Nothing is added yet: first the checks and the preview, then you confirm.")}
+              </p>
+              <button type="submit" className="btn-primary h-10 w-full sm:h-8 sm:w-auto" disabled={!!busy}>
+                <Icon name={busy === "one" ? "loader" : "eye"} size={14} className={busy === "one" ? "animate-spin" : ""} />
+                {busy === "one" ? t("Check ho raha hai…", "Checking…") : t("Check karke preview dekho", "Check & preview")}
+              </button>
+            </div>
+          </form>
+        </Section>
       </div>
     </div>
   );

@@ -25,6 +25,7 @@ export async function POST(req: Request) {
       const b = db.batch();
       b.create(C.leads.doc(id), {
         email: r.email, businessKey: r.businessKey, businessName: r.businessName, website: r.website, phone: r.phone, country: r.country,
+        contactName: r.contactName || null, city: r.city || null, category: r.category || null, about: r.about || null, note: r.note || null,
         listId: listRef.id, campaignId: null, status: r.outcome === "review" ? "needs_review" : "ready", hasMessage: false, createdAt: nowIso(), updatedAt: nowIso(),
       });
       b.create(C.businesses.doc(key(r.businessKey!)), { leadId: id, at: nowIso() });

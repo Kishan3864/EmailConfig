@@ -19,6 +19,13 @@ export const NAV: { title: Text; items: NavItem[] }[] = [
           en: "Everything at a glance: how many mails went out today, how many wait for your approval, what the next step is and whether anything needs attention.",
         },
       },
+      {
+        href: "/help", icon: "bulb", label: { hi: "Kaise use karein", en: "How to use" }, short: { hi: "Guide", en: "Guide" },
+        info: {
+          hi: "Poore software ki aasaan guide: Test (DRY-RUN) aur LIVE ka flow, har menu aur har button ka kaam, aur CSV mein kya dena hai.",
+          en: "A simple guide to the whole software: the Test (DRY-RUN) and LIVE flow, what every menu and button does, and what to put in the CSV.",
+        },
+      },
     ],
   },
   {

@@ -54,13 +54,16 @@ export async function count(q: Query) {
   return (await q.count().get()).data().count;
 }
 
-export type Lead = {
+/** Extra facts about a lead from the import file. The AI may use only these (and the lead's own website description). */
+export type LeadExtra = { contactName?: string | null; city?: string | null; category?: string | null; about?: string | null; note?: string | null };
+export type Lead = LeadExtra & {
   id: string; email: string; businessKey: string; businessName?: string; website?: string; phone?: string; country?: string;
   listId: string; campaignId?: string | null;
   // ready | needs_review | rejected | sent | check_manual | bounced | replied | opted_out | failed | suppressed | already_contacted
   status: string; facts?: string; factsAt?: string; dryRunAt?: string; createdAt: string; updatedAt: string;
 };
-export type Campaign = { id: string; name: string; listId: string; timezone: string; language: string; status: string; samplesApproved: boolean; createdAt: string; startedAt?: string };
+/** mailType: "ai" (AI writes each mail; also when missing) or "tpl1" | "tpl2" | "tpl3" (a fixed template from Settings) */
+export type Campaign = { id: string; name: string; listId: string; timezone: string; language: string; status: string; samplesApproved: boolean; createdAt: string; startedAt?: string; mailType?: string };
 export type Message = {
   id: string; leadId: string; leadEmail: string; businessName?: string; campaignId: string; language: string;
   subject: string; body: string; subjectEn?: string | null; bodyEn?: string | null;
@@ -69,7 +72,7 @@ export type Message = {
   messageId?: string; smtpResponse?: string; error?: string; createdAt: string;
 };
 export type LeadList = { id: string; name: string; sourceNote: string; confirmed: boolean; createdAt: string; counts?: Record<string, number> };
-export type ImportRow = { id: string; rowNo: number; email?: string; businessName?: string; website?: string; phone?: string; country?: string; outcome: string; reason?: string; businessKey?: string };
+export type ImportRow = LeadExtra & { id: string; rowNo: number; email?: string; businessName?: string; website?: string; phone?: string; country?: string; outcome: string; reason?: string; businessKey?: string };
 export type SendLog = { id: string; messageId?: string; leadId?: string; to: string; dryRun: boolean; ok: boolean; response: string; at: string };
 export type Reply = { id: string; leadId?: string | null; kind: string; fromEmail: string; subject?: string; body: string; bodyEn?: string | null; messageId?: string; receivedAt: string };
 export type Suppression = { id: string; value: string; kind: string; reason: string; createdAt: string };

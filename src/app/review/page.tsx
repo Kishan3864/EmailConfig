@@ -2,18 +2,22 @@ import Link from "next/link";
 import { C, rows, type Campaign, type Message, type Lead, type LeadList } from "@/lib/fsdb";
 import { getSettings } from "@/lib/settings";
 import { fullText } from "@/lib/compose";
+import { englishOf } from "@/lib/english";
 import type { T } from "@/lib/i18n";
 import { getT } from "@/lib/i18n-server";
 import { knowsWhatTheyDo } from "@/lib/leadinfo";
 import { LOGO_HEIGHT, LOGO_PNG_BASE64, LOGO_WIDTH } from "@/lib/logo";
-import { isTemplateId, templateOf } from "@/lib/templates";
+import { isTemplateId, mailPlan, templateForLead, templateLabel, templateOf } from "@/lib/templates";
+import { siteStatus } from "@/lib/website";
 import { ActionButton } from "@/components/ActionButton";
+import { EnglishMail } from "@/components/EnglishMail";
 import { knownItems, parseFacts, siteNote } from "@/components/factChips";
 import { Info } from "@/components/Info";
 import { Icon } from "@/components/icons";
+import { forText, siteGroup, siteText } from "@/components/siteText";
 import { ToastOnMount } from "@/components/toast";
 import { Badge, Callout, EmptyState, MailPreview, NextStep, PageHeader } from "@/components/ui";
-import { approveMessage, approveAllShown, rejectMessage, regenerateDraft } from "../actions";
+import { approveMessage, approveAllShown, rejectMessage, regenerateDraft, translateMessage } from "../actions";
 import { DraftEditor } from "./DraftEditor";
 
 export async function generateMetadata() {
@@ -80,11 +84,13 @@ export default async function Review() {
     );
   const info = t(
     `Har nayi mail (AI ki likhi ya template se bani) yahan rukti hai: aapke approve kiye bina koi mail nahi jaati.
-Approve karo = mail sending window mein jayegi (jab uska campaign chal raha ho). Naya version = AI dobara likhega (template wali mail template se dobara banegi).
+Left = mail bilkul jaisi lead ko jayegi (uski bhasha mein). Right = usi mail ka English matlab, har lead ka alag, sirf aapke check ke liye: lead ko sirf left wala text jaata hai. Edit ke baad English apne aap naye text se dobara banta hai; na dikhe to ‘Abhi translation banao’ dabao.
+Approve karo = mail sending window mein jayegi (jab uska campaign chal raha ho). Naya version = AI dobara likhega (template wali mail is lead ke sahi template se dobara banegi).
 Reject karo = is lead ko kabhi mail nahi jayegi. Edit = text khud badlo, same rules check honge.
 DRY-RUN mein approve ki hui mail test address pe jaati hai. Approval yaad rehta hai: LIVE on karne ke baad wahi mail asli lead ko bhi jayegi.`,
     `Every new mail (written by the AI or made from a template) waits here: no mail goes out without your approval.
-Approve = the mail goes out in the sending window (while its campaign is running). New version = the AI writes it again (a template mail is made again from its template).
+Left = the mail exactly as the lead gets it (in its language). Right = the same mail's meaning in English, separate for every lead, only for you to check: the lead gets only the text on the left. After an edit the English is made again from the new text automatically; if it is missing, press ‘Make translation now’.
+Approve = the mail goes out in the sending window (while its campaign is running). New version = the AI writes it again (a template mail is made again from the right template for this lead).
 Reject = this lead will never be emailed. Edit = change the text yourself; the same rules are checked.
 In DRY-RUN an approved mail goes to your test address. The approval is kept: once LIVE is on, the same mail also goes to the real lead.`,
   );
@@ -142,32 +148,21 @@ In DRY-RUN an approved mail goes to your test address. The approval is kept: onc
         const list = lead ? lists.get(lead.listId) : undefined;
         const camp = m.campaignId ? campaigns.get(m.campaignId) : undefined;
         const hold = holdOf(m);
-        // a template campaign fills a fixed text (no AI, so no AI facts); an AI campaign gets only the known facts
-        const tpl = camp && isTemplateId(camp.mailType) ? templateOf(s, camp.mailType) : null;
-        const tplName = tpl ? (tpl.name || "").trim() || `Template ${tpl.id.slice(3)}` : "";
+        // a template campaign fills a fixed text (no AI, so no AI facts); an AI campaign gets only the known facts.
+        // The draft names its template (a "by website" campaign picks one per lead); older drafts do not, so pick it again.
+        const tplId = isTemplateId(m.tplId) ? m.tplId : (camp ? templateForLead(camp, lead?.website)?.id : undefined) ?? null;
+        const tpl = tplId ? templateOf(s, tplId) : null;
+        const bySite = !!camp && mailPlan(camp).kind === "bysite";
+        const own = siteStatus(lead?.website);
+        // a template tagged for one group, used for a lead of the other (one template for all, or the tag changed later)
+        const offTag = !!lead && !!tpl && tpl.for !== "any" && (tpl.for === "site") !== own.has;
         const facts = parseFacts(lead?.facts);
         const known = lead ? knownItems(lead, facts, lang) : [];
         const site = lead ? siteNote(lead.website, facts, lang) : null;
         const guessed = !!lead && !knowsWhatTheyDo(known);
         const name = m.businessName || m.leadEmail;
-        const edited = (m as Message & { edited?: boolean }).edited;
-        const translation = m.bodyEn ? (
-          <MailPreview label="English translation" subject={m.subjectEn || undefined} text={m.bodyEn} tone="translation"
-            footer={(
-              <div className="flex items-start gap-1.5 border-t border-indigo-100 px-3 py-2 text-2xs leading-relaxed text-slate-500">
-                <Icon name="info" size={12} className="mt-px shrink-0 text-indigo-400" />
-                {t(
-                  <>Sirf aapke padhne ke liye. Lead ko ye nahi jaata, use sirf &quot;Mail (jaisi jayegi)&quot; wala text jaata hai.</>,
-                  <>Only for you to read. The lead does not get this; they only get the &quot;Mail (as it will be sent)&quot; text.</>,
-                )}
-              </div>
-            )} />
-        ) : m.language !== "en" ? (
-          <div className="min-w-0">
-            <div className="mb-1.5 flex items-center gap-1.5 text-2xs font-bold uppercase tracking-wider text-slate-400"><Icon name="globe" size={12} />English translation</div>
-            <div className="rounded-lg border border-dashed border-slate-200 px-4 py-6 text-center text-xs text-slate-500">{t("Translation nahi hai, kyunki ye text aapne khud edit kiya hai.", "No translation, because you edited this text yourself.")}</div>
-          </div>
-        ) : null;
+        // the right-hand side: this mail's own English version, made from its current text
+        const en = englishOf(m);
         return (
           <article key={m.id} className="card-flush">
             <header className="flex items-start gap-3 border-b border-slate-100 px-4 py-3 sm:px-5">
@@ -176,7 +171,8 @@ In DRY-RUN an approved mail goes to your test address. The approval is kept: onc
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <Link href={`/contacts/${encodeURIComponent(m.leadId)}`} className="min-w-0 truncate text-sm font-semibold text-slate-900 hover:text-indigo-600">{name}</Link>
                   <Badge v="language" label={m.language.toUpperCase()} tone="indigo" dot={false} />
-                  {edited && <Badge v="edited" label={t("Aapne edit kiya", "Edited by you")} tone="amber" />}
+                  {bySite && lead && <Badge v="site" label={siteGroup(own.has, t)} tone={own.has ? "sky" : "slate"} dot={false} />}
+                  {m.edited && <Badge v="edited" label={t("Aapne edit kiya", "Edited by you")} tone="amber" />}
                 </div>
                 <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-500">
                   <span className="inline-flex min-w-0 max-w-full items-center gap-1"><Icon name="mail" size={12} className="text-slate-400" /><span className="truncate">{m.leadEmail}</span></span>
@@ -193,12 +189,12 @@ In DRY-RUN an approved mail goes to your test address. The approval is kept: onc
                 <Info title={t("Ye card kya hai", "About this card")} size={13}
                   text={tpl
                     ? t(
-                      "Is lead ke liye template se bani draft. Naam pe click karo to contact ki poori history khulegi, campaign ke naam pe click karo to campaign ka page. Mail padho, phir neeche se Approve, Edit, Naya version ya Reject karo.",
-                      "The draft made from a template for this lead. Click the name to open the contact's full history, or the campaign name to open the campaign page. Read the mail, then choose Approve, Edit, New version or Reject below.",
+                      "Is lead ke liye template se bani draft; kaunsa template aur kyun, wo ‘Template se bani’ wali line mein likha hai. Naam pe click karo to contact ki poori history khulegi, campaign ke naam pe click karo to campaign ka page. Left wali mail padho aur right mein uska English matlab check karo, phir neeche se Approve, Edit, Naya version ya Reject karo.",
+                      "The draft made from a template for this lead; the ‘Written from template’ line says which template and why. Click the name to open the contact's full history, or the campaign name to open the campaign page. Read the mail on the left and check its English meaning on the right, then choose Approve, Edit, New version or Reject below.",
                     )
                     : t(
-                      "Is lead ke liye AI ki likhi draft. Naam pe click karo to contact ki poori history khulegi, campaign ke naam pe click karo to campaign ka page. ‘AI ko ye pata tha’ wali list aur mail padho, phir neeche se Approve, Edit, Naya version ya Reject karo.",
-                      "The draft the AI wrote for this lead. Click the name to open the contact's full history, or the campaign name to open the campaign page. Read the ‘What the AI knew’ list and the mail, then choose Approve, Edit, New version or Reject below.",
+                      "Is lead ke liye AI ki likhi draft. Naam pe click karo to contact ki poori history khulegi, campaign ke naam pe click karo to campaign ka page. ‘AI ko ye pata tha’ wali list, left wali mail aur right mein uska English matlab padho, phir neeche se Approve, Edit, Naya version ya Reject karo.",
+                      "The draft the AI wrote for this lead. Click the name to open the contact's full history, or the campaign name to open the campaign page. Read the ‘What the AI knew’ list, the mail on the left and its English meaning on the right, then choose Approve, Edit, New version or Reject below.",
                     )} />
               </div>
             </header>
@@ -211,14 +207,27 @@ In DRY-RUN an approved mail goes to your test address. The approval is kept: onc
                 </Callout>
               )}
               {tpl ? (
-                <div className="flex items-start gap-1.5 rounded-lg bg-slate-50 px-3 py-2.5 text-xs text-slate-600">
-                  <Icon name="file" size={13} className="mt-px shrink-0 text-slate-400" />
-                  <span className="min-w-0 break-words">{t("Template se bani:", "Written from template:")} <span className="font-medium text-slate-800">{tplName}</span></span>
-                  <Info title={t("Template se bani mail", "A mail made from a template")} size={13}
-                    text={t(
-                      "Is campaign mein AI mail nahi likhta: ye mail Settings ke ‘Email templates’ wale fixed template se bani hai. {{business}}, {{contact}} jaise placeholders lead ki jaankari se bhare gaye; jo jaankari nahi thi, wahan template ka default text aaya. Padh ke Approve, Edit ya Reject karo.",
-                      "In this campaign the AI does not write the mails: this mail was made from a fixed template in Settings → ‘Email templates’. Placeholders like {{business}} and {{contact}} were filled from the lead's details; where a detail was missing, the template's default text was used. Read it, then Approve, Edit or Reject.",
-                    )} />
+                <div className="rounded-lg bg-slate-50 px-3 py-2.5 text-xs text-slate-600">
+                  <div className="flex items-start gap-1.5">
+                    <Icon name="file" size={13} className="mt-px shrink-0 text-slate-400" />
+                    <span className="min-w-0 break-words">
+                      {t("Template se bani:", "Written from template:")} <span className="font-medium text-slate-800">{templateLabel(s, tpl.id)}</span>
+                      {lead && <span className="text-slate-500"> · {siteText(own, t)}</span>}
+                    </span>
+                    <Info title={t("Template se bani mail", "A mail made from a template")} size={13}
+                      text={t(
+                        "Is campaign mein AI mail nahi likhta: ye mail Settings ke ‘Email templates’ wale fixed template se bani hai. ‘Website ke hisaab se 2 templates’ wale campaign mein jin leads ki apni website hai unhe ek template jaata hai, baaki sabko doosra. Facebook / Instagram / Google Maps / directory ka link apni website nahi maana jaata. {{business}}, {{contact}} jaise placeholders lead ki jaankari se bhare gaye; jo jaankari nahi thi, wahan template ka default text aaya. Padh ke Approve, Edit ya Reject karo.",
+                        "In this campaign the AI does not write the mails: this mail was made from a fixed template in Settings → ‘Email templates’. In a ‘Two templates, by website’ campaign, leads with their own website get one template and all other leads get the other one. A Facebook / Instagram / Google Maps / directory link does not count as their own website. Placeholders like {{business}} and {{contact}} were filled from the lead's details; where a detail was missing, the template's default text was used. Read it, then Approve, Edit or Reject.",
+                      )} />
+                  </div>
+                  {offTag && (
+                    <p className="mt-1.5 flex items-start gap-1.5 text-amber-700">
+                      <Icon name="alert" size={12} className="mt-0.5 shrink-0" />
+                      <span className="min-w-0 break-words">{own.has
+                        ? t(`Dhyan do: ye template ‘${forText(tpl.for, t)}’ ke liye likha hai, par is lead ki apni website hai. Padh ke dekho ki text is lead pe theek baithta hai.`, `Note: this template is written for ‘${forText(tpl.for, t)}’, but this lead has its own website. Check that the text fits this lead.`)
+                        : t(`Dhyan do: ye template ‘${forText(tpl.for, t)}’ ke liye likha hai, par is lead ki apni website nahi hai. Padh ke dekho ki text is lead pe theek baithta hai.`, `Note: this template is written for ‘${forText(tpl.for, t)}’, but this lead has no website of its own. Check that the text fits this lead.`)}</span>
+                    </p>
+                  )}
                 </div>
               ) : (
                 <div className="rounded-lg bg-slate-50 px-3 py-2.5">
@@ -263,7 +272,8 @@ In DRY-RUN an approved mail goes to your test address. The approval is kept: onc
                 </div>
               )}
 
-              <div className={translation ? "grid gap-4 md:grid-cols-2" : "max-w-2xl"}>
+              {/* left: the mail exactly as it goes out, in its language; right: always the same mail in English, only for me */}
+              <div className="grid gap-4 md:grid-cols-2">
                 <MailPreview label={t("Mail (jaisi jayegi)", "Mail (as it will be sent)")} subject={m.subject} text={fullText(s, m.body, m.language, list?.sourceNote || "")}
                   footer={s.signatureLogo ? (
                     <div className="border-t border-slate-100 px-3 py-2.5">
@@ -272,7 +282,8 @@ In DRY-RUN an approved mail goes to your test address. The approval is kept: onc
                       <div className="mt-1 text-2xs text-slate-400">{t("Ye logo signature ke saath mail mein judta hai", "This logo is added to the mail with the signature")}</div>
                     </div>
                   ) : undefined} />
-                {translation}
+                <EnglishMail en={en} text={en.kind === "ready" ? fullText(s, en.body, "en", list?.sourceNote || "") : undefined}
+                  action={translateMessage.bind(null, m.id)} />
               </div>
             </div>
 

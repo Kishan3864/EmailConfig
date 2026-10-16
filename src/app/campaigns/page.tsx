@@ -5,7 +5,8 @@ import { getSettings } from "@/lib/settings";
 import { getT } from "@/lib/i18n-server";
 import { countryInfo } from "@/lib/lang";
 import { estimateFinish } from "@/lib/schedule";
-import { TEMPLATE_IDS, isTemplateId, templateOf } from "@/lib/templates";
+import { TEMPLATE_IDS, mailPlan, templateLabel, templateOf } from "@/lib/templates";
+import { hasOwnWebsite } from "@/lib/website";
 import { fmtDate } from "@/lib/time";
 import { Badge, EmptyState, NextStep, PageHeader, Progress, Section } from "@/components/ui";
 import { Icon } from "@/components/icons";
@@ -30,7 +31,9 @@ export default async function Campaigns() {
     const top = [...freq.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
     const ci = countryInfo(top);
     const review = leads.filter((x) => x.get("status") === "needs_review").length;
-    return { id: l.id, name: l.name, count: leads.length, review, language: ci?.language || "en", timezone: ci?.timezone || "Europe/Paris" };
+    // for a "by website" campaign: how many of the free leads get which template
+    const site = leads.filter((x) => hasOwnWebsite(x.get("website"))).length;
+    return { id: l.id, name: l.name, count: leads.length, review, noSite: leads.length - site, site, language: ci?.language || "en", timezone: ci?.timezone || "Europe/Paris" };
   }));
 
   let ahead = 0;
@@ -44,17 +47,28 @@ export default async function Campaigns() {
   }
 
   const available = listInfo.filter((l) => l.count > 0);
-  // the three Settings templates for the form, with the language their text is in and whether they pass the draft rules
+  // the six Settings templates for the form: whom each is written for, the language its text is in and whether it passes
+  // the draft rules (a template for leads with a website is filled with an example lead that has one, for {{website}})
   const templates: TemplateChoice[] = TEMPLATE_IDS.map((id) => {
     const x = templateOf(s, id);
-    const r = tryTemplate(x.subject, x.body, s);
-    return { id, name: x.name, lang: r.lang, ok: r.ok };
+    const r = tryTemplate(x.subject, x.body, s, true, x.for === "site");
+    return { id, name: x.name, lang: r.lang, ok: r.ok, for: x.for };
   });
-  // "AI" or "Template 2: More enquiries" (a campaign without a mailType is an AI campaign)
-  const mailTypeOf = (mt?: string) => {
-    if (!isTemplateId(mt)) return "AI";
-    const n = templateOf(s, mt).name.trim();
-    return `Template ${mt.slice(3)}${n ? `: ${n}` : ""}`;
+  // "AI", "Template 2: More enquiries" or "Website ke hisaab se: T3 + T6" (a campaign without a mailType is an AI campaign);
+  // detail = which template goes to which group, for the tooltip
+  const mailTypeOf = (c: Campaign): { label: string; detail?: string; ai: boolean } => {
+    const p = mailPlan(c);
+    if (p.kind === "ai") return { label: "AI", ai: true };
+    if (p.kind === "one" || p.nosite === p.site) return { label: templateLabel(s, p.kind === "one" ? p.id : p.site), ai: false };
+    const pair = `T${p.nosite.slice(3)} + T${p.site.slice(3)}`;
+    return {
+      label: t(`Website ke hisaab se: ${pair}`, `By website: ${pair}`),
+      detail: t(
+        `Jinki website NAHI hai: ${templateLabel(s, p.nosite)}\nJinki website HAI: ${templateLabel(s, p.site)}`,
+        `Leads without a website: ${templateLabel(s, p.nosite)}\nLeads with a website: ${templateLabel(s, p.site)}`,
+      ),
+      ai: false,
+    };
   };
   const newest = out.reverse(); // newest first
   const draft = newest.find((x) => x.c.status === "draft");
@@ -139,8 +153,8 @@ export default async function Campaigns() {
       title={t("Naya campaign banao", "Create a new campaign")}
       icon="plus"
       info={t(
-        "List chuno, bhasha aur timezone check karo, aur ‘Mail kaise banegi’ mein AI ya koi template chuno. Phir ‘Campaign banao’ dabao. List ke saare free leads is campaign mein jud jaate hain. Banane se koi mail nahi jaati: pehle 5 samples banenge, jinhe aap padhoge.",
-        "Choose a list, check the language and timezone, and pick the AI or a template under ‘How mails are written’. Then press ‘Create campaign’. All free leads of the list are added to this campaign. Creating it sends no mail: first 5 samples are made for you to read.",
+        "List chuno, bhasha aur timezone check karo, aur ‘Mail kaise banegi’ chuno: website ke hisaab se 2 templates (jinki website NAHI hai unhe ek, jinki HAI unhe doosra), AI, ya ek template sabke liye. Phir ‘Campaign banao’ dabao. List ke saare free leads is campaign mein jud jaate hain. Banane se koi mail nahi jaati: pehle 5 samples banenge, jinhe aap padhoge.",
+        "Choose a list, check the language and timezone, and choose ‘How mails are written’: two templates by website (one for leads without a website, another for leads with one), the AI, or one template for everyone. Then press ‘Create campaign’. All free leads of the list are added to this campaign. Creating it sends no mail: first 5 samples are made for you to read.",
       )}
       sub={t("Sirf wahi lists dikhti hain jinke leads abhi kisi campaign mein nahi hain.", "Only lists whose leads are not in a campaign yet are shown.")}
     >
@@ -176,6 +190,7 @@ export default async function Campaigns() {
             </thead>
             <tbody>
               {newest.map(({ c, remaining, sent, finish }) => {
+                const mt = mailTypeOf(c);
                 const total = sent + remaining;
                 const pct = c.status === "done" ? 1 : total ? sent / total : 0;
                 return (
@@ -186,8 +201,8 @@ export default async function Campaigns() {
                         <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-slate-400">
                           <span>{t("Banaya", "Created")}: {fmtDate(c.createdAt)}</span>
                           <span aria-hidden>·</span>
-                          <span className="inline-flex min-w-0 items-center gap-1" title={t("Mail kaise banti hai", "How mails are written")}>
-                            <Icon name={isTemplateId(c.mailType) ? "file" : "bot"} size={11} className="shrink-0" /><span className="break-words">{mailTypeOf(c.mailType)}</span>
+                          <span className="inline-flex min-w-0 items-center gap-1" title={`${t("Mail kaise banti hai", "How mails are written")}${mt.detail ? `\n${mt.detail}` : ""}`}>
+                            <Icon name={mt.ai ? "bot" : "file"} size={11} className="shrink-0" /><span className="break-words">{mt.label}</span>
                           </span>
                         </div>
                       </div>
@@ -227,12 +242,12 @@ export default async function Campaigns() {
         title="Campaigns"
         info={auto
           ? t(
-            "Campaign = ek lead list + bhasha + timezone + mail ka tareeka (AI ya template). Flow: campaign banao → 5 sample drafts banao → unhe padh ke approve karke start karo → uske baad nayi drafts apne aap approve hoti hain (Settings mein auto-approve on hai) → worker sending window mein dheere-dheere bhejta hai.",
-            "Campaign = one lead list + language + timezone + how mails are written (AI or a template). Flow: create a campaign → make 5 sample drafts → read them, approve and start → after that, new drafts are approved automatically (auto-approve is on in Settings) → the worker sends slowly within the sending window.",
+            "Campaign = ek lead list + bhasha + timezone + mail ka tareeka (AI ya templates). Flow: campaign banao → 5 sample drafts banao → unhe padh ke approve karke start karo → uske baad nayi drafts apne aap approve hoti hain (Settings mein auto-approve on hai) → worker sending window mein dheere-dheere bhejta hai.",
+            "Campaign = one lead list + language + timezone + how mails are written (the AI or templates). Flow: create a campaign → make 5 sample drafts → read them, approve and start → after that, new drafts are approved automatically (auto-approve is on in Settings) → the worker sends slowly within the sending window.",
           )
           : t(
-            "Campaign = ek lead list + bhasha + timezone + mail ka tareeka (AI ya template). Flow: campaign banao → 5 sample drafts banao → unhe padh ke approve karke start karo → baaki har mail Approve page pe approve karo → worker sending window mein dheere-dheere bhejta hai.",
-            "Campaign = one lead list + language + timezone + how mails are written (AI or a template). Flow: create a campaign → make 5 sample drafts → read them, approve and start → approve every other mail on the Approve page → the worker sends slowly within the sending window.",
+            "Campaign = ek lead list + bhasha + timezone + mail ka tareeka (AI ya templates). Flow: campaign banao → 5 sample drafts banao → unhe padh ke approve karke start karo → baaki har mail Approve page pe approve karo → worker sending window mein dheere-dheere bhejta hai.",
+            "Campaign = one lead list + language + timezone + how mails are written (the AI or templates). Flow: create a campaign → make 5 sample drafts → read them, approve and start → approve every other mail on the Approve page → the worker sends slowly within the sending window.",
           )}
         sub={auto
           ? t(

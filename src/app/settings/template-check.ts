@@ -10,15 +10,18 @@ import { validateDraft } from "@/lib/validate";
 export const EXAMPLE_LEAD = { businessName: "Bella Vista", contactName: "Laura", city: "Lyon", category: "restaurant", country: "France" };
 /** The same lead with only a business name, so the {{x|text}} defaults show. */
 const BARE_LEAD = { businessName: EXAMPLE_LEAD.businessName };
+/** The example lead's own website, for templates written for leads with a website ({{website}} is filled with it). */
+export const EXAMPLE_SITE = "bellavista-lyon.fr";
 
 const PLACEHOLDER = /\{\{\s*([a-z_]+)\s*(?:\|[^}]*)?\}\}/gi;
 
 /**
  * Fills a template the way the draft engine does and runs the same rules (lib/validate.ts) on it.
  * The language rule is checked against the text's own language, so it never fails here: `lang` tells which campaign language fits.
+ * withSite: the example lead also has a website of its own (EXAMPLE_SITE); without it the lead has none, so {{website}} stays empty.
  */
-export function tryTemplate(subject: string, body: string, me: Pick<Settings, "senderName" | "business">, full = true) {
-  const lead = full ? EXAMPLE_LEAD : BARE_LEAD;
+export function tryTemplate(subject: string, body: string, me: Pick<Settings, "senderName" | "business">, full = true, withSite = false) {
+  const lead = { ...(full ? EXAMPLE_LEAD : BARE_LEAD), website: withSite ? EXAMPLE_SITE : null };
   // templateVars reads only senderName and business from the settings
   const vars = templateVars(lead, me as Settings);
   const s = fillTemplate(subject, vars), b = fillTemplate(body, vars);

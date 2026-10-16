@@ -3,6 +3,7 @@ import { db, C, nowIso } from "./fsdb";
 import { getSettings, getState, setState } from "./settings";
 import { trySendOne, recoverCrashed, closeFinishedCampaigns } from "./sender";
 import { ensureDrafts } from "./drafts";
+import { ensureTranslations } from "./translate";
 import { syncInbox } from "./inbox";
 import { inWindow } from "./schedule";
 import { log } from "./log";
@@ -29,7 +30,7 @@ async function release(owner: string) {
   });
 }
 
-/** One worker cycle: recover, sync inbox (every 10 min), prepare drafts, send at most one mail. */
+/** One worker cycle: recover, sync inbox (every 10 min), prepare drafts and their English versions, send at most one mail. */
 export async function runTick(): Promise<string> {
   const owner = randomUUID();
   if (!(await acquire(owner))) return "another worker is running";
@@ -52,6 +53,8 @@ export async function runTick(): Promise<string> {
     if (!st.globalStop && !st.alert && running.length && (s.approveEach || nearWindow)) {
       await ensureDrafts().catch((e) => log("error", "ai", `ensureDrafts: ${e instanceof Error ? e.message : e}`));
     }
+    // English versions of drafts that do not have one yet (only for me to read on the Approve page; nothing is sent)
+    await ensureTranslations(st).catch((e) => log("error", "ai", `ensureTranslations: ${e instanceof Error ? e.message : e}`));
     const r = await trySendOne();
     await closeFinishedCampaigns();
     await dailyReport().catch((e) => log("warn", "report", `daily report failed: ${e instanceof Error ? e.message : e}`));

@@ -11,7 +11,9 @@ import { addToLedger, importSentFolder } from "@/lib/ledger";
 import { log, event } from "@/lib/log";
 import { chat } from "@/lib/ai";
 import { validateDraft } from "@/lib/validate";
-import { MAIL_TYPES } from "@/lib/templates";
+import { BY_SITE, MAIL_TYPES, isTemplateId } from "@/lib/templates";
+import { AI_DOWN, ensureTranslation } from "@/lib/translate";
+import { hasOwnWebsite } from "@/lib/website";
 import type { T } from "@/lib/i18n";
 import { getT } from "@/lib/i18n-server";
 
@@ -253,9 +255,13 @@ export async function importSentAction() {
 export async function createCampaign(fd: FormData) {
   const listId = String(fd.get("listId"));
   const mailType = String(fd.get("mailType") || "ai");
+  // "by website": both templates must be real ones, so a lead never gets a mail meant for the other group
+  const tplNoSite = String(fd.get("tplNoSite") || ""), tplSite = String(fd.get("tplSite") || "");
+  if (mailType === BY_SITE && (!isTemplateId(tplNoSite) || !isTemplateId(tplSite))) throw new Error("Choose a template for leads without a website and one for leads with a website");
   const ref = await C.campaigns.add({
     name: String(fd.get("name") || "Campaign"), listId, timezone: String(fd.get("timezone")), language: String(fd.get("language")),
     mailType: (MAIL_TYPES as readonly string[]).includes(mailType) ? mailType : "ai",
+    ...(mailType === BY_SITE ? { tplNoSite, tplSite } : {}),
     status: "draft", samplesApproved: false, createdAt: nowIso(),
   });
   // attach every unassigned lead of the list (ready or still needing review)
@@ -264,6 +270,11 @@ export async function createCampaign(fd: FormData) {
     const b = db.batch();
     for (const l of leads.slice(i, i + 400)) b.update(l.ref, { campaignId: ref.id, updatedAt: nowIso() });
     await b.commit();
+  }
+  // "by website": how many leads get which template, counted once here so the campaign page needs no extra reads
+  if (mailType === BY_SITE) {
+    const site = leads.filter((l) => hasOwnWebsite(l.get("website"))).length;
+    await ref.update({ siteSplit: { site, nosite: leads.length - site } });
   }
   await log("info", "campaign", `campaign "${fd.get("name")}" created with ${leads.length} leads`);
   redirect(`/campaigns/${ref.id}`);
@@ -303,8 +314,7 @@ export async function regenerateDraft(messageId: string) {
   await C.leads.doc(messageId).update({ hasMessage: false });
   await C.draftJobs.doc(messageId).delete().catch(() => {});
   const r = await draftForLead(messageId);
-  revalidatePath(`/campaigns/${m.get("campaignId")}`);
-  revalidatePath("/review");
+  revalidateMail(m.get("campaignId"), messageId);
   return r.ok
     ? t("Naya version ban gaya\nPadh ke approve karo.", "New version ready\nRead it, then approve.")
     : t(
@@ -402,7 +412,8 @@ export async function rejectMessage(id: string) {
   const ref = C.messages.doc(id);
   const m = await ref.get();
   if (!m.exists || m.get("status") !== "ready") return t("Error: Ye mail ab approval ke liye nahi ruki hai", "Error: This mail is no longer waiting for approval");
-  await ref.update({ status: "rejected", approved: false });
+  // a rejected mail is never sent, so it needs no English version either
+  await ref.update({ status: "rejected", approved: false, enNeeded: false, enRetryAt: null });
   await setLead(id, { status: "rejected" });
   await event(id, "rejected_mail", "mail rejected: this lead will not be emailed");
   revalidatePath("/review");
@@ -418,8 +429,42 @@ export async function saveDraftEdit(id: string, fd: FormData) {
   const body = String(fd.get("body") || "").replace(/\r/g, "").trim();
   const errors = validateDraft(subject, body, m.get("language"), m.get("businessName") || "");
   if (errors.length) return t("Error: Edit save nahi hua\n", "Error: Edit not saved\n") + draftProblems(errors, t);
-  await ref.update({ subject, body, subjectEn: null, bodyEn: null, edited: true, approved: false, approvedAt: null });
+  const foreign = m.get("language") !== "en";
+  // the old English version belongs to the old text: drop it, and make a new one from the saved text right away
+  await ref.update({ subject, body, subjectEn: null, bodyEn: null, enFor: null, enNeeded: foreign, enRetryAt: foreign ? nowIso() : null, enTries: 0, enError: null, edited: true, approved: false, approvedAt: null });
   await event(id, "edited", "draft edited by hand");
+  const tr: { ok: boolean; error?: string } = foreign ? await ensureTranslation(id).catch((e) => ({ ok: false, error: msg(e) })) : { ok: true };
+  revalidateMail(m.get("campaignId"), id);
+  if (!tr.ok) {
+    // lib/translate.ts: a failed try is retried after 2 minutes; a rate limit or key problem pauses the AI for 30
+    const wait = AI_DOWN.test(tr.error || "") ? "30" : "2";
+    return t(
+      `Warning: Edit save ho gaya, par English translation abhi nahi bana\nWorker lagbhag ${wait} minute baad apne aap dobara try karega, ya card pe ‘Abhi translation banao’ dabao. Wajah: ${tr.error}`,
+      `Warning: Edit saved, but the English translation was not made yet\nThe worker tries again by itself in about ${wait} minutes, or press ‘Make translation now’ on the card. Reason: ${tr.error}`,
+    );
+  }
+  return foreign
+    ? t("Edit save ho gaya\nRight side ka English translation bhi naye text se ban gaya. Ek baar padh lo, phir approve karo.", "Edit saved\nThe English translation on the right was made again from the new text. Read it once more, then approve.")
+    : t("Edit save ho gaya\nEk baar aur padh lo, phir approve karo.", "Edit saved\nRead it once more, then approve.");
+}
+
+/** Every page that shows a draft and its English version. */
+function revalidateMail(campaignId: string | undefined, leadId: string) {
   revalidatePath("/review");
-  return t("Edit save ho gaya\nEk baar aur padh lo, phir approve karo.", "Edit saved\nRead it once more, then approve.");
+  if (campaignId) revalidatePath(`/campaigns/${campaignId}`);
+  revalidatePath(`/contacts/${encodeURIComponent(leadId)}`);
+  revalidatePath("/sent");
+}
+
+/** Makes the English translation of one mail now (again, if it already has one). */
+export async function translateMessage(id: string) {
+  const { t } = await getT();
+  const m = await C.messages.doc(id).get();
+  if (!m.exists) return t("Error: Ye mail nahi mili", "Error: This mail was not found");
+  if (m.get("language") === "en") return t("Ye mail English mein hi hai\nAlag translation ki zaroorat nahi.", "This mail is already in English\nNo translation needed.");
+  const r = await ensureTranslation(id, true);
+  revalidateMail(m.get("campaignId"), id);
+  return r.ok
+    ? t("English translation ban gaya\nRight side mein dikh raha hai.", "English translation made\nIt shows on the right.")
+    : t(`Error: English translation nahi ban paya\n${r.error}`, `Error: Could not make the English translation\n${r.error}`);
 }

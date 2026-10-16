@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "migrate:settings": "tsx scripts/migrate-settings.ts",
     "deploy:indexes": "firebase deploy --only firestore:indexes",
-    "test:ledger": "tsx scripts/test-ledger.ts"
+    "test:ledger": "tsx scripts/test-ledger.ts",
+    "test:templates": "tsx scripts/test-templates.ts"
   },
   "dependencies": {
     "cheerio": "^1.1.2",

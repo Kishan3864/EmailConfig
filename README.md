@@ -1,9 +1,9 @@
 # EmailConfig: self-hosted cold outreach
 
-A single-user app that emails each lead **once ever**, slowly and automatically, from your Hostinger mailbox. Each message is personalised by an AI from facts the app checks on the lead's real homepage. When the app is unsure about anything, it does not send.
+A single-user app that emails each lead **once ever**, slowly and automatically, from your Hostinger mailbox. Each message is personalised by an AI from facts the app checks on the lead's real homepage, or filled in from your own templates (one for leads without a website, another for leads with one). Whatever its language, you check every mail next to its English translation before it goes out. When the app is unsure about anything, it does not send.
 
 - **Web UI**: Next.js 15, run with pm2 behind nginx on your own server. The interface is in Hinglish or English (switch at the top of every page, remembered per browser): every menu sits in a sidebar that can be collapsed, every section has an (i) with help, each page says what to do next, and results and problems show up as toasts. On a phone it works like an app (bottom tab bar); use the browser's "Add to Home Screen" to open it full screen.
-- **Worker**: a second pm2 process. Every minute it syncs the inbox (every 10 minutes), prepares AI drafts and sends at most one mail.
+- **Worker**: a second pm2 process. Every minute it syncs the inbox (every 10 minutes), prepares drafts and their English translations, and sends at most one mail.
 - **Database**: Firestore (free Spark plan), in the Firebase project's existing database. Every outreach collection is prefixed `outreach_`, so it never mixes with the website's own collections, and the website's default-deny rule keeps it server-only.
 - **Mail**: Nodemailer (SMTP) and imapflow (IMAP) against Hostinger
 
@@ -60,6 +60,8 @@ Update later:
 cd ~/email.flexypdf.com && git pull && npm ci && npm run build && pm2 restart outreach-web outreach-worker
 ```
 
+Nothing needs migrating after an update: new settings fields (such as the extra templates) have defaults, and drafts made before the update get their English translation from the worker.
+
 Run the worker in one place only. A Firestore lock and the ledger prevent double sends even if two run, but one is cleaner.
 
 ## Local development
@@ -86,12 +88,13 @@ Firestore indexes live in `firestore.indexes.json`. Deploy them with `npm run de
 
 - **Columns** (names can differ; you match them on the Import page, which also has a sample CSV): `email` (required), `business_name`, `contact_name`, `website`, `city`, `country` (sets language and timezone), `category` (type of business), `about` (what they do), `note` (one true fact about them), `phone`. One address at a time: **Import → Add a single lead** (same checks as a file).
 - **AI mails** use only these facts plus the business's own website title/description. The AI never comments on the recipient's website and never guesses what a business does; without `category`/`about` the mail stays general. The Approve page shows exactly what the AI knew.
-- **Templates**: Settings → Email templates holds three fixed texts with placeholders (`{{business}}`, `{{contact|there}}`, `{{city|your area}}`, `{{category|small businesses}}`, `{{my_name}}`, `{{my_business}}`; the text after `|` is used when the lead has no value). A campaign uses either the AI or one template. Template mails pass the same checks and the same approval.
+- **Templates**: Settings → Email templates holds six fixed texts with placeholders (`{{business}}`, `{{contact|there}}`, `{{city|your area}}`, `{{category|small businesses}}`, `{{website|your website}}`, `{{my_name}}`, `{{my_business}}`; the text after `|` is used when the lead has no value). Each template is tagged with whom it is written for: any lead, leads without a website, or leads with a website. A campaign uses the AI, one template for every lead, or **two templates by website**: one for leads without a website of their own, the other for leads with one, picked for each lead automatically. Template mails pass the same checks and the same approval.
+- **Website or not**: only the CSV's `website` value decides (nothing is fetched). A social profile, Google Maps, directory, link-in-bio, chat or booking / delivery link counts as no website. `{{website}}` is the lead's own domain (e.g. `bellavista.fr`), or empty.
 - **Sender name**: every lead sees mails from Settings → "Name in the inbox (From name)", or the Business name when it is blank (e.g. "Brighton Solution").
 
 ## What goes out, and how to see it
 
-- **Approve page.** With "Approve every mail" on (Settings, on by default), every AI draft waits here. You see the full mail with signature and footer, the English translation, and the homepage facts the AI used. You can Approve it, edit it (the edit is checked by the same rules), write a new version, or Reject it (that lead is then never emailed). Only approved mails can be sent.
+- **Approve page.** With "Approve every mail" on (Settings, on by default), every draft waits here. On the left the full mail exactly as it goes out (with signature and footer), in the lead's language; on the right always the same mail in English. Every mail gets its own translation, made from its final text and made again after an edit; an English mail just says it is in English already. The worker fills in a missing translation within a minute or two (after a failed try it retries later, less and less often), or press "Make translation now". The translation is never sent. AI mails also show the facts the AI used; template mails show which template was used and why. You can Approve it, edit it (the edit is checked by the same rules), write a new version, or Reject it (that lead is then never emailed). Only approved mails can be sent. The Campaign page (samples and its latest mails), the Sent page and the Contact page show the mail and its English side by side too.
 - **Mode switch (Dashboard).** DRY-RUN sends approved mails only to your test address; LIVE sends them to the leads. The switch asks for a second click, and saving Settings never changes the mode. A mail that already went to your test address in dry-run goes to the lead, with the same text, once you switch to live.
 - **Sent page.** Choose a day to see how many mails went to leads, how many dry-run mails went to you, and what failed. Each entry shows the subject and the full text exactly as sent, plus the server's reply. Every live mail also has a copy in the mailbox's Sent folder.
 - **Daily report.** After 23:00 IST, on days with any activity, the alert address gets a summary: counts, every mail sent (time, recipient, subject), failures, replies, opt-outs, bounces, and drafts waiting for approval.

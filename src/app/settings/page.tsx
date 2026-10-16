@@ -16,7 +16,8 @@ import { Info } from "@/components/Info";
 import { Icon, type IconName } from "@/components/icons";
 import { ToastOnMount } from "@/components/toast";
 import { Badge, Callout, Field, NextStep, PageHeader, Section } from "@/components/ui";
-import { EXAMPLE_LEAD } from "./template-check";
+import { forChip, forText } from "@/components/siteText";
+import { EXAMPLE_LEAD, EXAMPLE_SITE } from "./template-check";
 import { TemplateEditor } from "./TemplateEditor";
 
 // "Settings" reads the same in Hinglish and English
@@ -34,6 +35,11 @@ const PLACEHOLDERS: { k: string; hi: string; en: string }[] = [
   { k: "city", hi: "City (CSV)", en: "City (CSV)" },
   { k: "category", hi: "Business ka type, jaise restaurant (CSV)", en: "Type of business, e.g. restaurant (CSV)" },
   { k: "country", hi: "Desh (CSV)", en: "Country (CSV)" },
+  {
+    k: "website",
+    hi: `Lead ki apni website ka domain, jaise ${EXAMPLE_SITE} (sirf ‘Website wale’ leads ke liye; baaki ke liye khaali)`,
+    en: `The lead's own website domain, e.g. ${EXAMPLE_SITE} (only for ‘Has a website’ leads; empty for the others)`,
+  },
   { k: "my_name", hi: "Aapka Naam (Sender profile)", en: "Your Name (Sender profile)" },
   { k: "my_business", hi: "Aapka Business (Sender profile)", en: "Your Business (Sender profile)" },
 ];
@@ -458,11 +464,37 @@ export default async function SettingsPage() {
 
             <Section id="templates" className="scroll-mt-20 lg:col-span-2" icon="file" title="Email templates"
               info={t(
-                "Teen fixed mails, jo campaign AI ki jagah use kar sakta hai: campaign banate waqt ‘Mail kaise banegi’ mein Template 1, 2 ya 3 chuno. Sabko same text jaata hai, har lead ke liye sirf placeholders (business ka naam, contact, city…) bharte hain. Template mails bhi same rules aur same approval se guzarti hain. Badalne ke baad ‘Settings save karo’ dabao: nayi drafts naye text se banengi, pehle bani drafts nahi badalti.",
-                "Three fixed mails a campaign can use instead of the AI: choose Template 1, 2 or 3 under ‘How mails are written’ when you create a campaign. Everyone gets the same text; for each lead only the placeholders (business name, contact, city…) are filled in. Template mails go through the same rules and the same approval. After a change, click ‘Save settings’: new drafts use the new text, drafts made earlier do not change.",
+                "Chhe fixed mails, jo campaign AI ki jagah use kar sakta hai. Campaign banate waqt ‘Mail kaise banegi’ mein ya to ek template chuno (sab leads ko wahi jaata hai), ya ‘Website ke hisaab se 2 templates’: jinki website NAHI hai unhe ek template, jinki website HAI unhe dusra. Har lead ke liye sirf placeholders (business ka naam, contact, city…) bharte hain. Template mails bhi same rules aur same approval se guzarti hain. Badalne ke baad ‘Settings save karo’ dabao: nayi drafts naye text se banengi, pehle bani drafts nahi badalti.",
+                "Six fixed mails a campaign can use instead of the AI. When you create a campaign, under ‘How mails are written’ choose either one template (every lead gets it) or ‘Two templates, by website’: one template for leads without a website, another for leads with one. For each lead only the placeholders (business name, contact, city…) are filled in. Template mails go through the same rules and the same approval. After a change, click ‘Save settings’: new drafts use the new text, drafts made earlier do not change.",
               )}
-              sub={t("AI ki jagah fixed text: sabko same mail, sirf naam aur details badalti hain", "Fixed text instead of the AI: the same mail for everyone, only names and details change")}>
+              sub={t("AI ki jagah fixed text: jinki website NAHI hai unke liye ek mail, jinki website HAI unke liye dusri. Sirf naam aur details badalti hain.", "Fixed text instead of the AI: one mail for leads without a website, another for leads with one. Only names and details change.")}>
               <div className="space-y-5">
+                <div className="rounded-lg border border-slate-200 p-3.5">
+                  <h3 className={SUBHEAD}><Icon name="globe" size={12} />{t("Website ke hisaab se 2 templates", "Two templates, by website")}</h3>
+                  <p className="text-xs leading-relaxed text-slate-600">{t(
+                    "Jinki website NAHI hai unke liye ek template likho, aur jinki website HAI unke liye dusra. Neeche har template ka ‘Kiske liye’ set karo, phir campaign banate waqt ‘Mail kaise banegi’ mein ‘Website ke hisaab se 2 templates’ chuno: app har lead ki CSV wali website dekh ke sahi template khud lagata hai.",
+                    "Write one template for leads without a website and another for leads with one. Set each template's ‘Written for’ below, then, when you create a campaign, choose ‘Two templates, by website’ under ‘How mails are written’: the app looks at each lead's website from the CSV and uses the right template by itself.",
+                  )}</p>
+                  <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+                    {(["nosite", "site"] as const).map((f) => (
+                      <div key={f} className={`min-w-0 rounded-md p-2.5 ${f === "site" ? "bg-sky-50/70" : "bg-violet-50/70"}`}>
+                        <dt className="flex flex-wrap items-center gap-1.5 font-semibold text-slate-800">
+                          {forText(f, t)}
+                          <span className={`inline-flex h-4 items-center rounded px-1 text-2xs font-semibold ${f === "site" ? "bg-sky-100 text-sky-700" : "bg-violet-100 text-violet-700"}`}>{forChip(f, t)}</span>
+                        </dt>
+                        <dd className="mt-1 break-words leading-relaxed text-slate-600">{f === "site"
+                          ? t(
+                            <>CSV mein unki apni website hai, jaise {EXAMPLE_SITE}. Template mein <code className={CODE}>{"{{website}}"}</code> isi domain se bharta hai.</>,
+                            <>The CSV has a website of their own, e.g. {EXAMPLE_SITE}. In the template, <code className={CODE}>{"{{website}}"}</code> is filled with that domain.</>,
+                          )
+                          : t(
+                            "CSV mein koi website nahi, ya sirf Facebook, Instagram, Google Maps, Linktree ya booking site ka link: wo unki apni website nahi ginti.",
+                            "No website in the CSV, or only a Facebook, Instagram, Google Maps, Linktree or booking-site link: that does not count as a website of their own.",
+                          )}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
                 <div className="grid gap-x-8 gap-y-5 rounded-lg border border-slate-200 bg-slate-50/60 p-3.5 md:grid-cols-2">
                   <div className="min-w-0">
                     <h3 className={SUBHEAD}><Icon name="list" size={12} />Placeholders
@@ -492,12 +524,22 @@ export default async function SettingsPage() {
                     <ul className="list-disc space-y-1.5 pl-4 text-xs leading-relaxed text-slate-600 marker:text-slate-300">
                       <li>{t("60 se 110 words (placeholders bharne ke baad)", "60 to 110 words (after the placeholders are filled in)")}</li>
                       <li>{t("Aakhir mein ek sawaal (?), jaise ‘Would it help if I sent you a few ideas?’", "End with a question (?), e.g. ‘Would it help if I sent you a few ideas?’")}</li>
-                      <li>{t("Text mein koi link ya website address nahi (link sirf signature mein aata hai)", "No links or web addresses in the text (links only go in the signature)")}</li>
+                      <li>{t(
+                        "Text mein koi link nahi (http:// ya www. wala): link sirf signature mein aata hai. {{website}} sirf domain likhta hai, wo chalta hai",
+                        "No links in the text (with http:// or www.): links only go in the signature. {{website}} writes just the domain, which is fine",
+                      )}</li>
                       <li>{t("CAPS wale shabd, ‘urgent’, ‘guarantee’, ‘100%’, ‘!!’ aur HTML nahi", "No ALL CAPS words, ‘urgent’, ‘guarantee’, ‘100%’, ‘!!’ or HTML")}</li>
                       <li>{t("Subject 90 akshar tak, ‘Re:’ ya ‘Fwd:’ ke bina", "Subject up to 90 characters, without ‘Re:’ or ‘Fwd:’")}</li>
                       <li>{t("Campaign ki bhasha mein likho: French campaign ke liye French text, warna draft fail hota hai", "Write it in the campaign's language: French text for a French campaign, otherwise the draft fails")}</li>
                       <li>{t("Signature aur footer mat likho: app unhe Sender profile se khud lagata hai", "Do not write a signature or footer: the app adds them from Sender profile")}</li>
-                      <li>{t("Sirf wahi likho jo har lead ke liye sach ho: ‘maine aapki website dekhi’ jaisi lines nahi", "Write only what is true for every lead: no lines like ‘I looked at your website’")}</li>
+                      <li>{t(
+                        "Sirf wahi likho jo us template ke group ke har lead ke liye sach ho. ‘Website wale’ template mein likh sakte ho ki unki website hai, par use judge mat karo (slow, purani, mobile pe kharab…) jab tak ye har lead ke liye sach na ho. ‘Maine aapki website dekhi’ jaisi lines nahi: template wali mail ke liye app lead ki website kabhi nahi kholta",
+                        "Write only what is true for every lead in the template's group. In a ‘Has a website’ template you may say they have a website, but do not judge it (slow, old, not made for phones…) unless that is true for every lead. No lines like ‘I looked at your website’: for a template mail the app never opens the lead's website",
+                      )}</li>
+                      <li>{t(
+                        "French mein ? aur : se pehle ka space waisa hi rehta hai jaisa aap likhte ho (‘Cela vous intéresse ?’)",
+                        "In French, the space before ? and : stays exactly as you write it (‘Cela vous intéresse ?’)",
+                      )}</li>
                     </ul>
                   </div>
                 </div>
@@ -605,10 +647,10 @@ export default async function SettingsPage() {
 
             <Section id="ai" className="scroll-mt-20" icon="bot" title="AI (OpenAI-compatible)"
               info={t(
-                "AI mail drafts likhta hai aur replies ka English translation karta hai. Koi bhi OpenAI-compatible service chalegi: OpenAI, Groq, OpenRouter. Badalne ke baad save karke 'AI test' dabao.",
-                "The AI writes mail drafts and translates replies into English. Any OpenAI-compatible service works: OpenAI, Groq, OpenRouter. After a change, save and click 'AI test'.",
+                "AI mail drafts likhta hai, har mail (jo English mein nahi hai) ka English translation banata hai (Approve page ke right side ke liye), aur replies ka English translation karta hai. Koi bhi OpenAI-compatible service chalegi: OpenAI, Groq, OpenRouter. Badalne ke baad save karke 'AI test' dabao.",
+                "The AI writes mail drafts, makes the English translation of every mail that is not in English (for the right side of the Approve page), and translates replies into English. Any OpenAI-compatible service works: OpenAI, Groq, OpenRouter. After a change, save and click 'AI test'.",
               )}
-              sub={t("Drafts likhne aur replies translate karne ke liye", "For writing drafts and translating replies")}>
+              sub={t("Drafts likhne aur mails / replies translate karne ke liye", "For writing drafts and translating mails and replies")}>
               <div className="space-y-4">
                 <Field label="Base URL" info={t("AI service ka API address. Apni service ka URL neeche ke examples se copy karo.", "The AI service's API address. Copy your service's URL from the examples below.")}
                   hint={<span className="flex flex-wrap items-center gap-1">{t("Jaise:", "e.g.")}{AI_URLS.map((u) => <code key={u} className={`${CODE} break-all`}>{u}</code>)}</span>}>

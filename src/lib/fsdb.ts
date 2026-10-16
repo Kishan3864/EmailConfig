@@ -62,11 +62,24 @@ export type Lead = LeadExtra & {
   // ready | needs_review | rejected | sent | check_manual | bounced | replied | opted_out | failed | suppressed | already_contacted
   status: string; facts?: string; factsAt?: string; dryRunAt?: string; createdAt: string; updatedAt: string;
 };
-/** mailType: "ai" (AI writes each mail; also when missing) or "tpl1" | "tpl2" | "tpl3" (a fixed template from Settings) */
-export type Campaign = { id: string; name: string; listId: string; timezone: string; language: string; status: string; samplesApproved: boolean; createdAt: string; startedAt?: string; mailType?: string };
+/**
+ * mailType: "ai" (AI writes each mail; also when missing), "tpl1".."tpl6" (one fixed template from Settings for every lead)
+ * or "bysite" (tplNoSite for leads without a website of their own, tplSite for leads with one). See lib/templates.ts.
+ */
+export type Campaign = {
+  id: string; name: string; listId: string; timezone: string; language: string; status: string; samplesApproved: boolean; createdAt: string; startedAt?: string;
+  mailType?: string; tplNoSite?: string | null; tplSite?: string | null;
+  siteSplit?: { site: number; nosite: number }; // "bysite": leads with / without their own website when it was created
+};
 export type Message = {
   id: string; leadId: string; leadEmail: string; businessName?: string; campaignId: string; language: string;
-  subject: string; body: string; subjectEn?: string | null; bodyEn?: string | null;
+  subject: string; body: string;
+  // the English version, only for me to check (lib/translate.ts): enFor = textKey of the text it was made from,
+  // enNeeded = it is still missing, enRetryAt = when the worker tries (again), enTries / enError / enAt = failed tries
+  subjectEn?: string | null; bodyEn?: string | null; enFor?: string | null; enNeeded?: boolean; enRetryAt?: string | null; enTries?: number;
+  enError?: string | null; enAt?: string | null;
+  tplId?: string | null; // the template this draft was filled from (null = written by the AI)
+  edited?: boolean; approved?: boolean;
   // ready | sending | sent | retry | check_manual | failed | bounced | blocked
   status: string; attempts: number; dryRunDone: boolean; nextAttemptAt?: string; sendStartedAt?: string; sentAt?: string;
   messageId?: string; smtpResponse?: string; error?: string; createdAt: string;

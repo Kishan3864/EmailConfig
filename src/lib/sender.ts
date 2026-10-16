@@ -8,6 +8,7 @@ import { canSend, emergencyStop, checkBounceThresholds } from "./guard";
 import { emailDomain, siteDomain } from "./importer";
 import { partsIn } from "./time";
 import { log, event } from "./log";
+import { textKey } from "./english";
 
 type SmtpErr = { code?: string; command?: string; responseCode?: number; response?: string; message?: string; stage?: "connect" | "send" };
 
@@ -110,7 +111,8 @@ export async function trySendOne(): Promise<string> {
     const list = (await C.lists.doc(lead.listId).get()).data() as LeadList | undefined;
     const parts = mailParts(s, msg.body, msg.language, list?.sourceNote || "a public business directory");
     // what the Sent page shows: the subject and the full text exactly as they went out
-    const record = { subject: msg.subject, text: parts.text, withLogo: !!parts.html, business: lead.businessName || null, leadEmail: lead.email, campaignId: c.id };
+    // textKey: which version of the draft went out, so the Sent page shows its English only while it still matches
+    const record = { subject: msg.subject, text: parts.text, textKey: textKey(msg.subject, msg.body), withLogo: !!parts.html, business: lead.businessName || null, leadEmail: lead.email, campaignId: c.id };
     const gapMin = s.gapMinMin + Math.random() * Math.max(0, s.gapMaxMin - s.gapMinMin);
 
     // ---------- DRY RUN: everything runs, delivery only to my test address ----------

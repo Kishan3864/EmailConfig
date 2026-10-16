@@ -1,20 +1,24 @@
 import Link from "next/link";
 import type { ComponentProps } from "react";
 import { notFound } from "next/navigation";
-import { C, count, rows, type Campaign, type Message, type LeadList } from "@/lib/fsdb";
+import { C, count, db, rows, type Campaign, type Message, type LeadList } from "@/lib/fsdb";
 import { getSettings } from "@/lib/settings";
 import { getT } from "@/lib/i18n-server";
 import { estimateFinish, capFor, priorSendingDays } from "@/lib/schedule";
 import { fullText } from "@/lib/compose";
 import { LOGO_HEIGHT, LOGO_PNG_BASE64, LOGO_WIDTH } from "@/lib/logo";
-import { isTemplateId, templateOf } from "@/lib/templates";
+import { isTemplateId, mailPlan, planTemplates, templateForLead, templateLabel, templateOf, tplNo, type TemplateId } from "@/lib/templates";
+import { siteStatus } from "@/lib/website";
+import { englishOf } from "@/lib/english";
 import { fmt, fmtDate } from "@/lib/time";
 import { Badge, Callout, EmptyState, MailPreview, NextStep, PageHeader, Section, Stat, Steps, type StepState } from "@/components/ui";
 import { ActionButton } from "@/components/ActionButton";
+import { EnglishMail } from "@/components/EnglishMail";
 import { Info } from "@/components/Info";
 import { Icon } from "@/components/icons";
+import { forText, siteGroup, siteText } from "@/components/siteText";
 import { ToastOnMount } from "@/components/toast";
-import { samplesAction, startCampaign, pauseCampaign, resumeCampaign, regenerateDraft } from "../../actions";
+import { samplesAction, startCampaign, pauseCampaign, resumeCampaign, regenerateDraft, translateMessage } from "../../actions";
 
 const STATUSES = ["ready", "needs_review", "sent", "replied", "bounced", "opted_out", "check_manual", "already_contacted"];
 
@@ -51,6 +55,21 @@ export default async function CampaignPage({ params }: { params: Promise<{ id: s
   const failing = (await C.draftJobs.where("campaignId", "==", id).limit(10).get()).docs.map((d) => ({
     id: d.id, attempts: d.get("attempts") as number | undefined, nextTryAt: d.get("nextTryAt") as string | undefined, lastError: d.get("lastError") as string | undefined,
   }));
+  // how the mails are made: the AI (also when mailType is missing), one Settings template for every lead, or two
+  // templates picked by the lead's own website ("by website"); templates are filled in without the AI (lib/templates.ts)
+  const plan = mailPlan(c);
+  const bySite = plan.kind === "bysite" ? plan : null;
+  // "by website": the website of the lead of each shown mail and each failed draft (at most 40 leads, one read)
+  const webOf = new Map<string, string | null>();
+  const leadIds = bySite ? [...new Set([...messages.map((m) => m.leadId || m.id), ...failing.map((f) => f.id)])] : [];
+  if (leadIds.length) {
+    for (const d of await db.getAll(...leadIds.map((x) => C.leads.doc(x)), { fieldMask: ["website"] })) {
+      if (d.exists) webOf.set(d.id, (d.get("website") as string | undefined) || null);
+    }
+  }
+  // "by website": how the campaign's leads split between the two templates, counted once by createCampaign
+  // (counting here would read every lead on every view, too many reads for the free Firestore plan)
+  const split = bySite && c.siteSplit && c.status !== "done" ? c.siteSplit : null;
 
   const done = c.status === "done";
   const running = c.status === "running";
@@ -67,22 +86,45 @@ export default async function CampaignPage({ params }: { params: Promise<{ id: s
   const stuck = done ? counts.needs_review + remaining : 0;
   // English plurals ("1 lead", "2 leads"); Hinglish keeps one form
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-  // how the mails are made: the AI (also when mailType is missing) or a Settings template, filled in without the AI
-  const tplId = isTemplateId(c.mailType) ? c.mailType : null;
-  const tplName = tplId ? templateOf(s, tplId).name.trim() : "";
-  const tplNo = tplId ? `Template ${tplId.slice(3)}` : "";
-  const mailType = tplId ? `${tplNo}${tplName ? `: ${tplName}` : ""}` : "AI";
-  const mailTypeInfo = tplId
+  const isTpl = plan.kind !== "ai";
+  const tpls = planTemplates(plan);
+  const twoTpls = tpls.length > 1; // "by website" with two different templates
+  // "Template 3", or "Template 3 ya Template 6" / "Template 3 or Template 6" (the one that failed is one of them)
+  const tplOr = t(tpls.map(tplNo).join(" ya "), tpls.map(tplNo).join(" or "));
+  // "Template 3 (‘name’)"
+  const named = (x: TemplateId) => { const n = templateOf(s, x).name.trim(); return `${tplNo(x)}${n ? ` (‘${n}’)` : ""}`; };
+  // which group gets which template, in a sentence
+  const pairHi = bySite ? `bina website walon ko ${tplNo(bySite.nosite)}, website walon ko ${tplNo(bySite.site)}` : "";
+  const pairEn = bySite ? `${tplNo(bySite.nosite)} for leads without a website, ${tplNo(bySite.site)} for leads with one` : "";
+  const mailType = plan.kind === "one" ? templateLabel(s, plan.id)
+    : plan.kind === "bysite" ? t(`Website ke hisaab se: ${tpls.map(tplNo).join(" + ")}`, `By website: ${tpls.map(tplNo).join(" + ")}`)
+      : "AI";
+  const mailTypeInfo = plan.kind === "one"
     ? t(
-      `Is campaign ki har mail ${tplNo}${tplName ? ` (‘${tplName}’)` : ""} se banti hai, AI se nahi: sabko same text, sirf {{business}}, {{contact}}, {{city}} jaise placeholders lead ki details se bharte hain. Text Settings → Email templates mein hai. Wahan badloge to nayi drafts naye text se banengi; pehle bani draft ke liye us par ‘Template se dobara banao’ dabao.`,
-      `Every mail of this campaign is made from ${tplNo}${tplName ? ` (‘${tplName}’)` : ""}, not by the AI: the same text for everyone, with placeholders like {{business}}, {{contact}}, {{city}} filled in from the lead's details. The text is in Settings → Email templates. If you change it there, new drafts use the new text; for a draft made earlier, press ‘Rebuild from template’ on it.`,
+      `Is campaign ki har mail ${named(plan.id)} se banti hai, AI se nahi: sabko same text, sirf {{business}}, {{contact}}, {{city}} jaise placeholders lead ki details se bharte hain. Text Settings → Email templates mein hai. Wahan badloge to nayi drafts naye text se banengi; pehle bani draft ke liye us par ‘Template se dobara banao’ dabao.`,
+      `Every mail of this campaign is made from ${named(plan.id)}, not by the AI: the same text for everyone, with placeholders like {{business}}, {{contact}}, {{city}} filled in from the lead's details. The text is in Settings → Email templates. If you change it there, new drafts use the new text; for a draft made earlier, press ‘Rebuild from template’ on it.`,
     )
-    : t(
-      "AI har lead ke liye alag mail likhta hai, sirf lead ki sach details se: CSV ki details (business, contact, category, city, about, note) aur unki apni website ka title/description. AI andaaza nahi lagata ki business kya karta hai, aur website pe kabhi comment nahi karta. Mail English mein na ho to uska English translation sirf aapke padhne ke liye dikhta hai.",
-      "The AI writes a separate mail for each lead, only from the lead's true details: the CSV details (business, contact, category, city, about, note) and the title/description of their own website. It never guesses what a business does and never comments on their website. When a mail is not in English, its English translation is shown only for you to read.",
-    );
-  const writing = tplId ? t("Template bhar rahe hain…", "Filling in the template…") : t("AI likh raha hai…", "AI is writing…");
-  const fixTemplate = <Link href="/settings#templates" className="btn btn-sm w-full sm:w-auto">{t("Template theek karo", "Fix the template")}<Icon name="arrow-right" size={13} /></Link>;
+    : plan.kind === "bysite"
+      ? t(
+        `Is campaign mein 2 templates hain, AI nahi likhta. App har lead ki website dekh ke apne aap sahi template chunta hai:\n• ${forText("nosite", t)} → ${templateLabel(s, plan.nosite)}\n• ${forText("site", t)} → ${templateLabel(s, plan.site)}\nSirf social page (Facebook, Instagram…), Google Maps, directory (jaise PagesJaunes) ya booking platform ka link apni website nahi maana jaata: aise lead ko bhi bina website wala template jaata hai.\n{{business}}, {{contact}}, {{city}}, {{website}} jaise placeholders lead ki details se bharte hain. Text Settings → Email templates mein hai. Wahan badloge to nayi drafts naye text se banengi; pehle bani draft ke liye us par ‘Template se dobara banao’ dabao.`,
+        `This campaign uses 2 templates, not the AI. The app looks at each lead's website and picks the right template by itself:\n• ${forText("nosite", t)} → ${templateLabel(s, plan.nosite)}\n• ${forText("site", t)} → ${templateLabel(s, plan.site)}\nA link to only a social page (Facebook, Instagram…), Google Maps, a directory (like PagesJaunes) or a booking platform does not count as a website of their own: such a lead also gets the no-website template.\nPlaceholders like {{business}}, {{contact}}, {{city}}, {{website}} are filled in from the lead's details. The text is in Settings → Email templates. If you change it there, new drafts use the new text; for a draft made earlier, press ‘Rebuild from template’ on it.`,
+      )
+      : t(
+        "AI har lead ke liye alag mail likhta hai, sirf lead ki sach details se: CSV ki details (business, contact, category, city, about, note) aur unki apni website ka title/description. AI andaaza nahi lagata ki business kya karta hai, aur website pe kabhi comment nahi karta. Mail English mein na ho to uska English translation sirf aapke padhne ke liye dikhta hai.",
+        "The AI writes a separate mail for each lead, only from the lead's true details: the CSV details (business, contact, category, city, about, note) and the title/description of their own website. It never guesses what a business does and never comments on their website. When a mail is not in English, its English translation is shown only for you to read.",
+      );
+  const writing = isTpl ? t("Template bhar rahe hain…", "Filling in the template…") : t("AI likh raha hai…", "AI is writing…");
+  const fixLabel = twoTpls ? t("Templates theek karo", "Fix the templates") : t("Template theek karo", "Fix the template");
+  const fixTemplate = <Link href="/settings#templates" className="btn btn-sm w-full sm:w-auto">{fixLabel}<Icon name="arrow-right" size={13} /></Link>;
+  // the template a shown mail was made from: stored on the draft (tplId); older drafts lack it, so it is worked out
+  // again from the lead's website exactly as the draft code does; null = written by the AI
+  const tplOfMail = (m: Row): TemplateId | null => {
+    if (isTemplateId(m.tplId)) return m.tplId;
+    if (m.tplId === null || plan.kind === "ai") return null;
+    if (plan.kind === "one") return plan.id;
+    const web = webOf.get(m.leadId || m.id);
+    return web === undefined ? null : templateForLead(c, web)?.id ?? null;
+  };
 
   const steps: StepItem[] = [
     { label: t("5 sample drafts banao", "Make 5 sample drafts"), state: samplesDone ? "done" : "current" },
@@ -144,25 +186,30 @@ export default async function CampaignPage({ params }: { params: Promise<{ id: s
         }
       : !c.samplesApproved && !messages.length
         ? {
-          text: tplId
+          text: plan.kind === "one"
             ? t(
-              `Pehle 5 sample drafts banao: neeche Controls mein ‘5 sample drafts banao’ dabao. ${tplNo} list ke pehle 5 leads ke liye bhara jayega (AI nahi likhta), aap unhe padh ke decide karoge.`,
-              `First make 5 sample drafts: press ‘Make 5 sample drafts’ in Controls below. ${tplNo} is filled in for the first 5 leads of the list (the AI does not write them); you read them and decide.`,
+              `Pehle 5 sample drafts banao: neeche Controls mein ‘5 sample drafts banao’ dabao. ${tplNo(plan.id)} list ke pehle 5 leads ke liye bhara jayega (AI nahi likhta), aap unhe padh ke decide karoge.`,
+              `First make 5 sample drafts: press ‘Make 5 sample drafts’ in Controls below. ${tplNo(plan.id)} is filled in for the first 5 leads of the list (the AI does not write them); you read them and decide.`,
             )
-            : t(
-              "Pehle 5 sample drafts banao: neeche Controls mein ‘5 sample drafts banao’ dabao. AI list ke pehle 5 leads ke liye mail likhega, aap unhe padh ke decide karoge.",
-              "First make 5 sample drafts: press ‘Make 5 sample drafts’ in Controls below. The AI writes a mail for the first 5 leads of the list; you read them and decide.",
-            ),
+            : bySite
+              ? t(
+                `Pehle 5 sample drafts banao: neeche Controls mein ‘5 sample drafts banao’ dabao. List ke pehle 5 leads ke liye unki website ke hisaab se template bhara jayega (AI nahi likhta): ${pairHi}. Aap unhe padh ke decide karoge.`,
+                `First make 5 sample drafts: press ‘Make 5 sample drafts’ in Controls below. A template is filled in for the first 5 leads of the list, picked by their website (the AI does not write them): ${pairEn}. You read them and decide.`,
+              )
+              : t(
+                "Pehle 5 sample drafts banao: neeche Controls mein ‘5 sample drafts banao’ dabao. AI list ke pehle 5 leads ke liye mail likhega, aap unhe padh ke decide karoge.",
+                "First make 5 sample drafts: press ‘Make 5 sample drafts’ in Controls below. The AI writes a mail for the first 5 leads of the list; you read them and decide.",
+              ),
         }
         : partial
-          ? tplId
+          ? isTpl
             // a template fails again until its text is fixed, so the fix comes first
             ? {
               text: t(
-                `Sirf ${messages.length}/${want} sample drafts bane. Wajah neeche error mein hai: aksar bhara hua ${tplNo} mail ke rules pass nahi karta. Template theek karo, phir Controls mein ‘5 sample drafts banao’ phir se dabao: sirf bache hue banenge.`,
-                `Only ${messages.length}/${want} sample drafts were made. The reason is in the error below: usually the filled-in ${tplNo} does not pass the mail rules. Fix the template, then press ‘Make 5 sample drafts’ in Controls again: only the missing ones are made.`,
+                `Sirf ${messages.length}/${want} sample drafts bane. Wajah neeche error mein hai: aksar bhara hua ${tplOr} mail ke rules pass nahi karta. ${twoTpls ? "Jo template fail hua (har lead ke saath likha hai), use" : "Template"} theek karo, phir Controls mein ‘5 sample drafts banao’ phir se dabao: sirf bache hue banenge.`,
+                `Only ${messages.length}/${want} sample drafts were made. The reason is in the error below: usually the filled-in ${tplOr} does not pass the mail rules. Fix ${twoTpls ? "the template that failed (shown next to each lead)" : "the template"}, then press ‘Make 5 sample drafts’ in Controls again: only the missing ones are made.`,
               ),
-              href: "/settings#templates", cta: t("Template theek karo", "Fix the template"), tone: "amber",
+              href: "/settings#templates", cta: fixLabel, tone: "amber",
             }
             : {
               text: t(
@@ -209,20 +256,24 @@ export default async function CampaignPage({ params }: { params: Promise<{ id: s
   // AI drafts that failed: only a running campaign retries them by itself
   const showFailing = failing.length > 0 && !done && (c.samplesApproved || remaining > 0);
   // a template draft fails when the filled-in text breaks a mail rule: the fix is in Settings, retrying alone does not help
-  const failText = tplId
+  // "by website": each failed lead shows which of the two templates it got
+  const fixWhich = twoTpls
+    ? t("Settings → Email templates mein wo template theek karo jo har lead ke saath likha hai", "Fix the template shown next to each lead in Settings → Email templates")
+    : t("Settings → Email templates mein template theek karo", "Fix the template in Settings → Email templates");
+  const failText = isTpl
     ? !c.samplesApproved
       ? t(
-        `${tplNo} se in leads ka sample draft nahi ban paya. Wajah neeche error mein hai, aksar bhara hua text mail ke rules pass nahi karta. Settings → Email templates mein template theek karo, phir Controls mein ‘5 sample drafts banao’ phir se dabao; sirf bache hue banenge.`,
-        `${tplNo} could not make a sample draft for these leads. The reason is in the error below; usually the filled-in text does not pass the mail rules. Fix the template in Settings → Email templates, then press ‘Make 5 sample drafts’ in Controls again; only the missing ones are made.`,
+        `${tplOr} se in leads ka sample draft nahi ban paya. Wajah neeche error mein hai, aksar bhara hua text mail ke rules pass nahi karta. ${fixWhich}, phir Controls mein ‘5 sample drafts banao’ phir se dabao; sirf bache hue banenge.`,
+        `${tplOr} could not make a sample draft for these leads. The reason is in the error below; usually the filled-in text does not pass the mail rules. ${fixWhich}, then press ‘Make 5 sample drafts’ in Controls again; only the missing ones are made.`,
       )
       : paused
         ? t(
-          `${tplNo} se in leads ka draft nahi ban paya (error neeche hai). Settings → Email templates mein template theek karo; ‘Resume karo’ dabane ke baad app apne aap dobara try karega.`,
-          `${tplNo} could not make a draft for these leads (the error is below). Fix the template in Settings → Email templates; after you press ‘Resume’, the app retries automatically.`,
+          `${tplOr} se in leads ka draft nahi ban paya (error neeche hai). ${fixWhich}; ‘Resume karo’ dabane ke baad app apne aap dobara try karega.`,
+          `${tplOr} could not make a draft for these leads (the error is below). ${fixWhich}; after you press ‘Resume’, the app retries automatically.`,
         )
         : t(
-          `${tplNo} se in leads ka draft nahi ban paya (error neeche hai). Settings → Email templates mein template theek karo; app thodi der baad apne aap dobara try karega.`,
-          `${tplNo} could not make a draft for these leads (the error is below). Fix the template in Settings → Email templates; the app retries automatically in a little while.`,
+          `${tplOr} se in leads ka draft nahi ban paya (error neeche hai). ${fixWhich}; app thodi der baad apne aap dobara try karega.`,
+          `${tplOr} could not make a draft for these leads (the error is below). ${fixWhich}; the app retries automatically in a little while.`,
         )
     : !c.samplesApproved
       ? t(
@@ -273,6 +324,49 @@ export default async function CampaignPage({ params }: { params: Promise<{ id: s
     : canSample ? t("Upar Controls mein ‘5 sample drafts banao’ dabao.", "Press ‘Make 5 sample drafts’ in Controls above.")
       : counts.needs_review > 0 ? t("Abhi koi Ready lead nahi hai. Pehle ‘Review chahiye’ wale leads Contacts mein approve karo, phir yahan samples banao.", "There is no Ready lead right now. First approve the ‘Needs review’ leads in Contacts, then make the samples here.")
         : t("Is campaign mein koi Ready lead nahi hai, isliye samples nahi ban sakte.", "This campaign has no Ready lead, so no samples can be made.");
+  const mailsInfo = (c.samplesApproved
+    ? t(
+      `Is campaign ki aakhri 30 mails: jo ${auto ? "" : "approval ya "}sending ke liye ruki hain aur jo ja chuki hain. Bheji gayi mail mein wahi text hai jo bhejte waqt save hua, yaani bilkul jo lead ko gaya. Na gayi mails aaj ki signature aur footer ke saath dikhti hain, jaise jayengi.`,
+      `The last 30 mails of this campaign: the ones waiting for ${auto ? "" : "approval or "}sending and the ones already sent. A sent mail shows the text saved at sending time, exactly what the lead got. Unsent mails show with today's signature and footer, the way they will go out.`,
+    )
+    : plan.kind === "one"
+      ? t(
+        `Ye mails ${tplNo(plan.id)} se bani hain, AI se nahi: list ke pehle 5 leads ki details placeholders mein bhari gayi hain. Har mail waise hi dikh rahi hai jaise lead ko jayegi (signature aur footer ke saath). Text badalna ho to Settings → Email templates mein template badlo, phir mail par ‘Template se dobara banao’ dabao.`,
+        `These mails were made from ${tplNo(plan.id)}, not by the AI: the details of the first 5 leads of the list are filled into its placeholders. Each mail shows exactly as the lead will get it (with signature and footer). To change the text, edit the template in Settings → Email templates, then press ‘Rebuild from template’ on the mail.`,
+      )
+      : bySite
+        ? t(
+          `Ye mails templates se bani hain, AI se nahi: list ke pehle 5 leads mein se har lead ko uski website ke hisaab se template mila (${pairHi}) aur uski details placeholders mein bhari gayi hain. Har mail waise hi dikh rahi hai jaise lead ko jayegi (signature aur footer ke saath). Text badalna ho to Settings → Email templates mein template badlo, phir mail par ‘Template se dobara banao’ dabao.`,
+          `These mails were made from templates, not by the AI: each of the first 5 leads of the list got the template picked by its website (${pairEn}), with its details filled into the placeholders. Each mail shows exactly as the lead will get it (with signature and footer). To change the text, edit the template in Settings → Email templates, then press ‘Rebuild from template’ on the mail.`,
+        )
+        : t(
+          "AI ne list ke pehle 5 leads ke liye ye mails likhi hain. Har mail waise hi dikh rahi hai jaise lead ko jayegi (signature aur footer ke saath). Koi mail pasand na aaye to ‘Naya version likho’ dabao.",
+          "The AI wrote these mails for the first 5 leads of the list. Each mail shows exactly as the lead will get it (with signature and footer). If you don't like a mail, press ‘Write a new version’.",
+        ))
+    + (bySite
+      ? t(
+        `\nHar mail par likha hai ki wo kis template se bani, aur lead ‘${siteGroup(false, t)}’ hai ya ‘${siteGroup(true, t)}’ (address ke neeche wajah bhi).`,
+        `\nEach mail shows which template it was made from, and whether the lead is ‘${siteGroup(false, t)}’ or ‘${siteGroup(true, t)}’ (with the reason below the address).`,
+      )
+      : "")
+    + t(
+      "\nLeft mein har mail bilkul waise hai jaise lead ko jaati hai, uski apni bhasha mein. Right mein hamesha usi mail ka English matlab hai: har mail ka apna alag translation, uske final text se bana (edit ke baad bhi). Ye sirf aapke check ke liye hai, lead ko nahi jaata. Jo mail English mein hi hai, uske right mein yahi likha aata hai.",
+      "\nOn the left, every mail shows exactly as the lead gets it, in its own language. On the right is always the meaning of that same mail in English: a separate translation for every mail, made from its final text (also after an edit). It is only for you to check; the lead never gets it. When a mail is already in English, the right side says so.",
+    );
+
+  // small chips on a mail card and a failed draft: the template it was made from, and the lead's website group
+  const tplChip = (x: TemplateId) => (
+    <span className="badge min-w-0 max-w-full bg-violet-50 text-violet-700 ring-violet-600/15">
+      <Icon name="file" size={11} className="shrink-0" /><span className="truncate">{templateLabel(s, x)}</span>
+    </span>
+  );
+  const groupChip = (has: boolean) => (
+    <span className={`badge ${has ? "bg-sky-50 text-sky-700 ring-sky-600/15" : "bg-slate-100 text-slate-600 ring-slate-500/10"}`}>
+      <Icon name="globe" size={11} className="shrink-0" />{siteGroup(has, t)}
+    </span>
+  );
+  // "by website": the template a failed draft's lead gets and why (its lead was read above)
+  const failPick = (leadId: string) => (bySite && webOf.has(leadId) ? templateForLead(c, webOf.get(leadId)) : null);
 
   const manualCta = t("Manual check karo", "Check manually");
 
@@ -286,16 +380,27 @@ export default async function CampaignPage({ params }: { params: Promise<{ id: s
           `The control page of this campaign. The steps at the top show where you are. First make and read 5 sample drafts; if they look good, approve and start. ${auto ? "After the start, new mails are approved automatically and go out (auto-approve is on in Settings)." : "After the start, every new mail shows up on the Approve page."}`,
         )}
         sub={
-          <span className="inline-flex flex-wrap items-center gap-2">
-            <Badge v={c.status} />
-            {s.dryRun && <Badge v="dry-run" label="DRY-RUN" />}
-            <span>{c.language.toUpperCase()} · {list?.name || t("List nahi mili", "List not found")}</span>
-            <span className="inline-flex min-w-0 max-w-full items-center gap-1">
-              <span className={`badge min-w-0 max-w-full ${tplId ? "bg-violet-50 text-violet-700 ring-violet-600/15" : "bg-indigo-50 text-indigo-700 ring-indigo-600/15"}`}>
-                <Icon name={tplId ? "file" : "bot"} size={11} className="shrink-0" /><span className="truncate">{mailType}</span>
+          <span className="flex flex-col gap-1.5">
+            <span className="inline-flex flex-wrap items-center gap-2">
+              <Badge v={c.status} />
+              {s.dryRun && <Badge v="dry-run" label="DRY-RUN" />}
+              <span>{c.language.toUpperCase()} · {list?.name || t("List nahi mili", "List not found")}</span>
+              <span className="inline-flex min-w-0 max-w-full items-center gap-1">
+                <span className={`badge min-w-0 max-w-full ${isTpl ? "bg-violet-50 text-violet-700 ring-violet-600/15" : "bg-indigo-50 text-indigo-700 ring-indigo-600/15"}`}>
+                  <Icon name={isTpl ? "file" : "bot"} size={11} className="shrink-0" /><span className="truncate">{mailType}</span>
+                </span>
+                <Info title={t("Mail kaise banti hai", "How mails are written")} text={mailTypeInfo} size={13} />
               </span>
-              <Info title={t("Mail kaise banti hai", "How mails are written")} text={mailTypeInfo} size={13} />
             </span>
+            {/* "by website": which template the campaign's leads get (counted when the campaign was created) */}
+            {split && bySite && (
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+                <span className="font-medium text-slate-600">{t("Campaign ke leads (banate waqt):", "Campaign leads (at creation):")}</span>
+                <span className="whitespace-nowrap">{t(`${split.nosite} bina website → ${tplNo(bySite.nosite)}`, `${split.nosite} without a website → ${tplNo(bySite.nosite)}`)}</span>
+                <span aria-hidden="true" className="text-slate-300">·</span>
+                <span className="whitespace-nowrap">{t(`${split.site} website wale → ${tplNo(bySite.site)}`, `${split.site} with a website → ${tplNo(bySite.site)}`)}</span>
+              </span>
+            )}
           </span>
         }
       />
@@ -317,20 +422,24 @@ export default async function CampaignPage({ params }: { params: Promise<{ id: s
       {showFailing && (
         <>
           <Callout tone="warn" title={c.samplesApproved ? t("Kuch drafts retry ke liye ruke hain", "Some drafts are waiting for a retry") : t("Kuch sample drafts nahi ban paye", "Some sample drafts could not be made")}
-            action={tplId && !partial ? fixTemplate : undefined}>
+            action={isTpl && !partial ? fixTemplate : undefined}>
             <p>{failText}</p>
             <ul className="mt-2.5 space-y-1.5">
-              {failing.map((f) => (
-                <li key={f.id} className="min-w-0 rounded-lg bg-white/70 px-3 py-2 text-xs ring-1 ring-inset ring-amber-200/70">
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
-                    {/* the id is the lead's email key: only "/" is escaped in it (never decodeURIComponent: a "%" in an address would crash the page) */}
-                    <span className="break-all font-semibold">{f.id.replace(/%2F/g, "/")}</span>
-                    <span>{t("Koshish", "Attempts")}: {f.attempts ?? "—"}</span>
-                    {running && <span>{t("Agli koshish", "Next try")}: {fmt(f.nextTryAt)}</span>}
-                  </div>
-                  {f.lastError && <div className="mt-1 break-words font-mono text-2xs leading-relaxed">{f.lastError}</div>}
-                </li>
-              ))}
+              {failing.map((f) => {
+                const pick = failPick(f.id);
+                return (
+                  <li key={f.id} className="min-w-0 rounded-lg bg-white/70 px-3 py-2 text-xs ring-1 ring-inset ring-amber-200/70">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                      {/* the id is the lead's email key: only "/" is escaped in it (never decodeURIComponent: a "%" in an address would crash the page) */}
+                      <span className="break-all font-semibold">{f.id.replace(/%2F/g, "/")}</span>
+                      <span>{t("Koshish", "Attempts")}: {f.attempts ?? "—"}</span>
+                      {running && <span>{t("Agli koshish", "Next try")}: {fmt(f.nextTryAt)}</span>}
+                    </div>
+                    {pick && <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">{tplChip(pick.id)}{groupChip(pick.site.has)}</div>}
+                    {f.lastError && <div className="mt-1 break-words font-mono text-2xs leading-relaxed">{f.lastError}</div>}
+                  </li>
+                );
+              })}
             </ul>
           </Callout>
           <ToastOnMount kind="warning" title={failToast.title} text={failToast.text} once={`drafts:${id}:${failing.length}`} />
@@ -356,20 +465,25 @@ export default async function CampaignPage({ params }: { params: Promise<{ id: s
       )}
 
       {showControls && <Section id="controls" title="Controls" icon="sliders"
-        info={tplId
+        info={plan.kind === "one"
           ? t(
-            `Campaign yahan se chalao.\n1. ‘5 sample drafts banao’: ${tplNo} list ke pehle 5 leads ke liye bhara jaata hai (AI nahi likhta).\n2. Unhe padho; theek lagein to ‘approve karke start karo’ do baar dabao (galti se na ho, isliye).\n3. Chalte campaign ko kabhi bhi Pause kar sakte ho; Resume se wahin se aage chalega.`,
-            `Run the campaign from here.\n1. ‘Make 5 sample drafts’: ${tplNo} is filled in for the first 5 leads of the list (the AI does not write them).\n2. Read them; if they look good, press ‘approve and start’ twice (so it never happens by mistake).\n3. You can pause a running campaign at any time; Resume carries on from where it stopped.`,
+            `Campaign yahan se chalao.\n1. ‘5 sample drafts banao’: ${tplNo(plan.id)} list ke pehle 5 leads ke liye bhara jaata hai (AI nahi likhta).\n2. Unhe padho; theek lagein to ‘approve karke start karo’ do baar dabao (galti se na ho, isliye).\n3. Chalte campaign ko kabhi bhi Pause kar sakte ho; Resume se wahin se aage chalega.`,
+            `Run the campaign from here.\n1. ‘Make 5 sample drafts’: ${tplNo(plan.id)} is filled in for the first 5 leads of the list (the AI does not write them).\n2. Read them; if they look good, press ‘approve and start’ twice (so it never happens by mistake).\n3. You can pause a running campaign at any time; Resume carries on from where it stopped.`,
           )
-          : t(
-            "Campaign yahan se chalao.\n1. ‘5 sample drafts banao’: AI list ke pehle 5 leads ke liye mail likhta hai.\n2. Unhe padho; theek lagein to ‘approve karke start karo’ do baar dabao (galti se na ho, isliye).\n3. Chalte campaign ko kabhi bhi Pause kar sakte ho; Resume se wahin se aage chalega.",
-            "Run the campaign from here.\n1. ‘Make 5 sample drafts’: the AI writes a mail for the first 5 leads of the list.\n2. Read them; if they look good, press ‘approve and start’ twice (so it never happens by mistake).\n3. You can pause a running campaign at any time; Resume carries on from where it stopped.",
-          )}>
+          : bySite
+            ? t(
+              `Campaign yahan se chalao.\n1. ‘5 sample drafts banao’: list ke pehle 5 leads ke liye unki website ke hisaab se template bhara jaata hai (AI nahi likhta): ${pairHi}.\n2. Unhe padho; theek lagein to ‘approve karke start karo’ do baar dabao (galti se na ho, isliye).\n3. Chalte campaign ko kabhi bhi Pause kar sakte ho; Resume se wahin se aage chalega.`,
+              `Run the campaign from here.\n1. ‘Make 5 sample drafts’: a template is filled in for the first 5 leads of the list, picked by their website (the AI does not write them): ${pairEn}.\n2. Read them; if they look good, press ‘approve and start’ twice (so it never happens by mistake).\n3. You can pause a running campaign at any time; Resume carries on from where it stopped.`,
+            )
+            : t(
+              "Campaign yahan se chalao.\n1. ‘5 sample drafts banao’: AI list ke pehle 5 leads ke liye mail likhta hai.\n2. Unhe padho; theek lagein to ‘approve karke start karo’ do baar dabao (galti se na ho, isliye).\n3. Chalte campaign ko kabhi bhi Pause kar sakte ho; Resume se wahin se aage chalega.",
+              "Run the campaign from here.\n1. ‘Make 5 sample drafts’: the AI writes a mail for the first 5 leads of the list.\n2. Read them; if they look good, press ‘approve and start’ twice (so it never happens by mistake).\n3. You can pause a running campaign at any time; Resume carries on from where it stopped.",
+            )}>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           {statusLine && <p className="min-w-0 text-sm text-slate-600">{statusLine}</p>}
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center lg:shrink-0">
             {canSample && <>
-              <ActionButton action={samplesAction.bind(null, id)} label={t("5 sample drafts banao", "Make 5 sample drafts")} icon={tplId ? "file" : "bot"} pendingText={writing} className={`${!messages.length || partial ? "btn-primary" : "btn"} ${WIDE}`} />
+              <ActionButton action={samplesAction.bind(null, id)} label={t("5 sample drafts banao", "Make 5 sample drafts")} icon={isTpl ? "file" : "bot"} pendingText={writing} className={`${!messages.length || partial ? "btn-primary" : "btn"} ${WIDE}`} />
               {startButton(`${messages.length && !partial ? "btn-primary" : "btn"} ${WIDE}`)}
             </>}
             {running && <ActionButton action={pauseCampaign.bind(null, id)} label={t("Pause karo", "Pause")} icon="pause" className={`btn ${WIDE}`} />}
@@ -433,20 +547,7 @@ export default async function CampaignPage({ params }: { params: Promise<{ id: s
           <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-slate-200/60 text-slate-500"><Icon name="mail" size={15} /></span>
           <div className="flex min-w-0 flex-1 items-center gap-1.5">
             <h2 className="h2">{mailsTitle}</h2>
-            <Info title={mailsTitle} text={c.samplesApproved
-              ? t(
-                `Is campaign ki aakhri 30 mails: jo ${auto ? "" : "approval ya "}sending ke liye ruki hain aur jo ja chuki hain. Bheji gayi mail mein wahi text hai jo bhejte waqt save hua, yaani bilkul jo lead ko gaya. Na gayi mails aaj ki signature aur footer ke saath dikhti hain, jaise jayengi.`,
-                `The last 30 mails of this campaign: the ones waiting for ${auto ? "" : "approval or "}sending and the ones already sent. A sent mail shows the text saved at sending time, exactly what the lead got. Unsent mails show with today's signature and footer, the way they will go out.`,
-              )
-              : tplId
-                ? t(
-                  `Ye mails ${tplNo} se bani hain, AI se nahi: list ke pehle 5 leads ki details placeholders mein bhari gayi hain. Har mail waise hi dikh rahi hai jaise lead ko jayegi (signature aur footer ke saath). Text badalna ho to Settings → Email templates mein template badlo, phir mail par ‘Template se dobara banao’ dabao.`,
-                  `These mails were made from ${tplNo}, not by the AI: the details of the first 5 leads of the list are filled into its placeholders. Each mail shows exactly as the lead will get it (with signature and footer). To change the text, edit the template in Settings → Email templates, then press ‘Rebuild from template’ on the mail.`,
-                )
-                : t(
-                  "AI ne list ke pehle 5 leads ke liye ye mails likhi hain. Har mail waise hi dikh rahi hai jaise lead ko jayegi (signature aur footer ke saath). English translation sirf aapke padhne ke liye hai, wo nahi jaati. Koi mail pasand na aaye to ‘Naya version likho’ dabao.",
-                  "The AI wrote these mails for the first 5 leads of the list. Each mail shows exactly as the lead will get it (with signature and footer). The English translation is only for you to read; it is not sent. If you don't like a mail, press ‘Write a new version’.",
-                )} />
+            <Info title={mailsTitle} text={mailsInfo} />
           </div>
           {messages.length > 0 && <span className="badge shrink-0">{t(`${messages.length} mail`, plural(messages.length, "mail", "mails"))}</span>}
         </div>
@@ -461,6 +562,14 @@ export default async function CampaignPage({ params }: { params: Promise<{ id: s
           const footer = stored
             ? m.sentWithLogo ? logo(t("Logo (is mail mein signature ke neeche tha)", "Logo (was below the signature in this mail)")) : undefined
             : s.signatureLogo ? logo(t("Logo (HTML mail mein signature ke neeche)", "Logo (below the signature in the HTML mail)")) : undefined;
+          const tid = tplOfMail(m);
+          // "by website": the lead's group and why (its lead was read above)
+          const web = bySite ? webOf.get(m.leadId || m.id) : undefined;
+          const site = web === undefined ? null : siteStatus(web);
+          // the right side: this mail's own English translation, made from its final text
+          const en = englishOf(m);
+          // an unsent draft can always be translated again; any other mail only when its translation is missing
+          const canTranslate = m.status === "ready" || (en.kind === "pending" && m.status !== "rejected");
           return (
             <article key={m.id} className="card space-y-4">
               <header className="flex flex-wrap items-start gap-x-3 gap-y-2">
@@ -477,15 +586,24 @@ export default async function CampaignPage({ params }: { params: Promise<{ id: s
                     {m.sentAt && <span className="inline-flex items-center gap-1"><Icon name="send" size={12} />{t("Bheji", "Sent")}: {fmt(m.sentAt)}</span>}
                     {m.status === "retry" && m.nextAttemptAt && <span className="inline-flex items-center gap-1"><Icon name="clock" size={12} />{t("Agli koshish", "Next try")}: {fmt(m.nextAttemptAt)}</span>}
                   </div>
+                  {(tid || site) && (
+                    <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
+                      {tid && tplChip(tid)}
+                      {site && groupChip(site.has)}
+                      {site && <span className="min-w-0 break-words text-2xs text-slate-500">{siteText(site, t)}</span>}
+                    </div>
+                  )}
                 </div>
                 {m.status === "ready" && (
-                  <ActionButton action={regenerateDraft.bind(null, m.id)} label={tplId ? t("Template se dobara banao", "Rebuild from template") : t("Naya version likho", "Write a new version")} icon="refresh" className="btn btn-sm" pendingText={writing}
+                  <ActionButton action={regenerateDraft.bind(null, m.id)} label={isTpl ? t("Template se dobara banao", "Rebuild from template") : t("Naya version likho", "Write a new version")} icon="refresh" className="btn btn-sm" pendingText={writing}
                     next={c.samplesApproved && !auto ? "/review" : undefined} nextCta={c.samplesApproved && !auto ? openApprove : undefined} />
                 )}
               </header>
-              <div className={m.bodyEn ? "grid gap-4 md:grid-cols-2" : "max-w-2xl"}>
+              {/* left: the mail exactly as the lead gets it; right: always its meaning in English, only for me */}
+              <div className="grid gap-4 md:grid-cols-2">
                 <MailPreview label={label} subject={m.subject} text={text} footer={footer} />
-                {m.bodyEn && <MailPreview label="English translation" subject={m.subjectEn || undefined} text={m.bodyEn} tone="translation" />}
+                <EnglishMail en={en} text={en.kind === "ready" ? fullText(s, en.body, "en", list?.sourceNote || NO_SOURCE) : undefined}
+                  action={canTranslate ? translateMessage.bind(null, m.id) : undefined} />
               </div>
               {m.smtpResponse && (
                 <p className="break-all rounded-lg bg-slate-50 px-3 py-2 font-mono text-xs text-slate-500">
@@ -503,16 +621,16 @@ export default async function CampaignPage({ params }: { params: Promise<{ id: s
 
         {!messages.length && (
           <div className="card-flush">
-            <EmptyState icon={tplId ? "file" : "bot"} title={t("Abhi koi draft nahi", "No drafts yet")} text={emptyText} />
+            <EmptyState icon={isTpl ? "file" : "bot"} title={t("Abhi koi draft nahi", "No drafts yet")} text={emptyText} />
           </div>
         )}
 
         {canSample && messages.length > 0 && !partial && (
           <NextStep title={t("Saare samples padh liye?", "Read all the samples?")} tone="emerald"
-            text={tplId
+            text={isTpl
               ? t(
-                "Theek lagein to start karo. Text badalna ho to Settings → Email templates mein template badlo, phir mail par ‘Template se dobara banao’ dabao.",
-                "If they look good, start. To change the text, edit the template in Settings → Email templates, then press ‘Rebuild from template’ on the mail.",
+                `Theek lagein to start karo. Text badalna ho to Settings → Email templates mein template badlo${twoTpls ? " (har mail par likha hai kaunsa)" : ""}, phir mail par ‘Template se dobara banao’ dabao.`,
+                `If they look good, start. To change the text, edit the template in Settings → Email templates${twoTpls ? " (each mail shows which one)" : ""}, then press ‘Rebuild from template’ on the mail.`,
               )
               : t("Theek lagein to start karo. Koi mail pasand na aaye to us par ‘Naya version likho’ dabao.", "If they look good, start. If you don't like a mail, press ‘Write a new version’ on it.")}>
             {startButton(`btn-primary ${WIDE}`)}

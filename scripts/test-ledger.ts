@@ -131,6 +131,7 @@ async function indexTests() {
     ["replies page", () => C.replies.where("kind", "in", ["reply", "optout"]).orderBy("receivedAt", "desc").limit(1).get()],
     ["logs: errors only", () => C.logs.where("level", "==", "error").orderBy("at", "desc").limit(1).get()],
     ["drafts: jobs waiting", () => C.draftJobs.where("nextTryAt", ">", t).limit(1).get()],
+    ["translations: tries that are due", () => C.messages.where("enRetryAt", "<=", t).orderBy("enRetryAt").limit(1).get()],
     ["ledger page", () => C.contacted.orderBy("at", "desc").limit(1).get()],
     ["suppression page", () => C.suppression.orderBy("createdAt", "desc").limit(1).get()],
   ];

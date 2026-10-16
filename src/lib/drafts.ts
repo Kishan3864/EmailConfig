@@ -1,8 +1,9 @@
 import { C, nowIso, rows, type Campaign, type Lead } from "./fsdb";
-import { getSettings, getState, setState } from "./settings";
+import { getSettings, getState } from "./settings";
 import { fetchFacts, type Facts } from "./facts";
 import { generateDraft } from "./ai";
-import { fillTemplate, isTemplateId, templateOf, templateVars } from "./templates";
+import { fillTemplate, templateForLead, templateOf, templateVars } from "./templates";
+import { aiPaused, ensureTranslation, pauseAi } from "./translate";
 import { validateDraft } from "./validate";
 import { log, event } from "./log";
 import { todayCap } from "./schedule";
@@ -20,8 +21,10 @@ export async function draftForLead(leadId: string): Promise<{ ok: boolean; error
   if ((await C.messages.doc(leadId).get()).exists) return { ok: true };
   const cd = await C.campaigns.doc(lead.campaignId).get();
   const campaign = { id: cd.id, ...cd.data() } as Campaign;
-  // a template campaign fills a fixed text from Settings; only AI campaigns need the homepage facts
-  const tpl = isTemplateId(campaign.mailType) ? templateOf(s, campaign.mailType) : null;
+  // a template campaign fills a fixed text from Settings (a "by website" campaign picks it by the lead's website);
+  // only AI campaigns need the homepage facts
+  const pick = templateForLead(campaign, lead.website);
+  const tpl = pick ? templateOf(s, pick.id) : null;
 
   let facts: Facts | null = null;
   if (!tpl) {
@@ -35,23 +38,28 @@ export async function draftForLead(leadId: string): Promise<{ ok: boolean; error
   const jobRef = C.draftJobs.doc(leadId);
   const job = await jobRef.get();
   try {
-    let d: { subject: string; body: string; subjectEn: string | null; bodyEn: string | null; errors: string[] };
+    let d: { subject: string; body: string; errors: string[] };
     if (tpl) {
       const vars = templateVars(lead, s);
       const subject = fillTemplate(tpl.subject, vars), body = fillTemplate(tpl.body, vars);
-      d = { subject, body, subjectEn: null, bodyEn: null, errors: validateDraft(subject, body, campaign.language, lead.businessName || "") };
+      d = { subject, body, errors: validateDraft(subject, body, campaign.language, lead.businessName || "") };
     } else d = await generateDraft(lead, facts!, campaign.language, s);
     if (d.errors.length) throw new Error("validation: " + d.errors.join("; "));
+    const foreign = campaign.language !== "en";
     // create() fails if a message already exists -> never two messages for one lead
     await C.messages.doc(leadId).create({
       leadId, leadEmail: lead.email, businessName: lead.businessName || null, campaignId: campaign.id, language: campaign.language,
-      subject: d.subject, body: d.body, subjectEn: d.subjectEn, bodyEn: d.bodyEn, status: "ready", attempts: 0, dryRunDone: false, createdAt: nowIso(),
+      subject: d.subject, body: d.body, tplId: pick?.id ?? null,
+      // a mail not in English gets its English version right below (or from the worker, if that fails)
+      subjectEn: null, bodyEn: null, enFor: null, enNeeded: foreign, enRetryAt: foreign ? nowIso() : null, enTries: 0, enError: null,
+      status: "ready", attempts: 0, dryRunDone: false, createdAt: nowIso(),
       // with "approve every mail" on, nothing can be sent until I approve it on the Approve page
       approved: !s.approveEach, approvedAt: s.approveEach ? null : nowIso(),
     });
     await ld.ref.update({ hasMessage: true });
     await jobRef.delete().catch(() => {});
-    await event(leadId, "draft", "validated draft created");
+    await event(leadId, "draft", pick ? `validated draft created from ${pick.id}` : "validated draft created");
+    if (foreign) await ensureTranslation(leadId).catch(() => {}); // never fails the draft: the worker retries
     return { ok: true };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -59,7 +67,7 @@ export async function draftForLead(leadId: string): Promise<{ ok: boolean; error
     const attempts = ((job.exists && job.get("attempts")) || 0) + 1;
     const wait = Math.min(15 * attempts, 360) * 60000;
     await jobRef.set({ attempts, lastError: msg.slice(0, 500), nextTryAt: new Date(Date.now() + wait).toISOString(), campaignId: campaign.id });
-    if (/HTTP 429|rate/i.test(msg)) await setState({ aiBackoffUntil: new Date(Date.now() + 30 * 60000).toISOString() });
+    if (/HTTP 429|rate.?limit/i.test(msg)) await pauseAi();
     await log("warn", "ai", `draft failed for ${lead.email} (attempt ${attempts}): ${msg.slice(0, 300)}`);
     return { ok: false, error: msg };
   }
@@ -68,7 +76,7 @@ export async function draftForLead(leadId: string): Promise<{ ok: boolean; error
 /** Keep a small batch of validated drafts ready for every running campaign. */
 export async function ensureDrafts() {
   const st = await getState();
-  if (st.aiBackoffUntil && new Date(st.aiBackoffUntil) > new Date()) return;
+  if (aiPaused() || (st.aiBackoffUntil && new Date(st.aiBackoffUntil) > new Date())) return;
   const s = await getSettings();
   const campaigns = rows<Campaign>(await C.campaigns.where("status", "==", "running").get());
   let budget = PER_TICK;
@@ -89,7 +97,8 @@ export async function ensureDrafts() {
       const r = await draftForLead(l.id);
       need--;
       budget--;
-      if (!r.ok && /HTTP 429/.test(r.error || "")) return;
+      // a rate limit, also one hit by the English translation right after a draft, pauses the AI for the rest of the tick
+      if ((!r.ok && /HTTP 429/.test(r.error || "")) || aiPaused()) return;
     }
   }
 }

@@ -17,10 +17,14 @@ export type Settings = {
   signatureLogo: boolean; // HTML mail with the logo embedded in the signature
   approveEach: boolean; // every draft must be approved by me before it can be sent
   fromName: string; // name shown in the lead's inbox; blank = business name, then sender name
-  // three fixed mail templates a campaign can use instead of the AI (placeholders: see lib/templates.ts)
-  tpl1Name: string; tpl1Subject: string; tpl1Body: string;
-  tpl2Name: string; tpl2Subject: string; tpl2Body: string;
-  tpl3Name: string; tpl3Subject: string; tpl3Body: string;
+  // six fixed mail templates a campaign can use instead of the AI (placeholders: see lib/templates.ts);
+  // tplNFor = whom it is written for: "any" lead, leads with "nosite" (no website of their own) or with a "site"
+  tpl1Name: string; tpl1Subject: string; tpl1Body: string; tpl1For: string;
+  tpl2Name: string; tpl2Subject: string; tpl2Body: string; tpl2For: string;
+  tpl3Name: string; tpl3Subject: string; tpl3Body: string; tpl3For: string;
+  tpl4Name: string; tpl4Subject: string; tpl4Body: string; tpl4For: string;
+  tpl5Name: string; tpl5Subject: string; tpl5Body: string; tpl5For: string;
+  tpl6Name: string; tpl6Subject: string; tpl6Body: string; tpl6For: string;
 };
 
 export const DEFAULTS: Settings = {
@@ -40,6 +44,7 @@ export const DEFAULTS: Settings = {
   approveEach: true,
   fromName: "",
   tpl1Name: "Website intro",
+  tpl1For: "any",
   tpl1Subject: "a website idea for {{business}}",
   tpl1Body: [
     "Hello {{contact|there}},",
@@ -51,6 +56,7 @@ export const DEFAULTS: Settings = {
     "Would it be useful if I sent you two or three ideas for {{business}}, without any obligation?",
   ].join("\n"),
   tpl2Name: "More enquiries",
+  tpl2For: "any",
   tpl2Subject: "more enquiries for {{business}}",
   tpl2Body: [
     "Hello {{contact|there}},",
@@ -61,16 +67,56 @@ export const DEFAULTS: Settings = {
     "",
     "If it helps, I can prepare a short example of how a page for {{business}} could look. Would that be interesting for you?",
   ].join("\n"),
-  tpl3Name: "Short and direct",
-  tpl3Subject: "website for {{business}}",
+  // a pair per language: one for leads without a website of their own, one for leads that already have one
+  tpl3Name: "No website yet (EN)",
+  tpl3For: "nosite",
+  tpl3Subject: "a website for {{business}}",
   tpl3Body: [
     "Hello {{contact|there}},",
     "",
-    "This is {{my_business}}. We create websites for small businesses that look professional, work well on phones and make it easy for new customers to get in touch.",
+    "I'm writing from {{my_business}}. Before they visit or call, many customers look up {{business}} online to check your services, opening hours and location. A simple website of your own, on your own domain name, makes that easy and helps them choose you.",
     "",
-    "The process is simple: a short call to understand what you offer, a first design you can review, and changes until you are happy with it. You don't need any technical knowledge.",
+    "We build clear, fast websites for local businesses that work well on phones, and we take care of the design, the text and the technical setup.",
     "",
-    "If a new or refreshed website is on your list this year, would you like me to share a few examples of our recent work?",
+    "Would it be useful if I prepared a free example of a homepage for {{business}}, without any obligation?",
+  ].join("\n"),
+  tpl4Name: "Already has a website (EN)",
+  tpl4For: "site",
+  tpl4Subject: "an idea for the {{business}} website",
+  tpl4Body: [
+    "Hello {{contact|there}},",
+    "",
+    "I'm writing from {{my_business}} about the website of {{business}} ({{website|your website}}).",
+    "",
+    "We help local businesses refresh the website they already have: a modern design, easy reading on phones, fast pages and a clear button to call, book or get in touch. You keep your domain name, and we take care of the design, the text and the technical work.",
+    "",
+    "Would it be useful if I prepared a free mockup of a refreshed homepage for {{business}}, without any obligation?",
+  ].join("\n"),
+  tpl5Name: "Pas encore de site (FR)",
+  tpl5For: "nosite",
+  tpl5Subject: "un site web pour {{business}}",
+  tpl5Body: [
+    "Bonjour,",
+    "",
+    "Je vous écris de la part de {{my_business}}, nous créons des sites web pour les commerces de proximité.",
+    "",
+    "Avant de venir, beaucoup de clients cherchent {{business}} en ligne pour voir vos services, vos horaires et votre adresse. Un site simple sur votre propre nom de domaine, facile à lire sur téléphone, les aide à vous choisir et à vous contacter.",
+    "",
+    "Nous nous occupons de tout : le design, les textes et la mise en ligne.",
+    "",
+    "Je peux vous préparer gratuitement une maquette de page d'accueil, sans engagement. Cela vous intéresse ?",
+  ].join("\n"),
+  tpl6Name: "Site existant (FR)",
+  tpl6For: "site",
+  tpl6Subject: "une idée pour le site de {{business}}",
+  tpl6Body: [
+    "Bonjour,",
+    "",
+    "Je vous écris de la part de {{my_business}} (création et refonte de sites web), au sujet du site de {{business}} ({{website|votre site}}).",
+    "",
+    "Nous aidons les commerces de proximité à moderniser le site qu'ils ont déjà : un design actuel, une lecture facile sur téléphone, des pages rapides et un bouton clair pour vous appeler, réserver ou vous écrire. Vous gardez votre nom de domaine, et nous nous occupons de tout le reste.",
+    "",
+    "Je peux vous préparer gratuitement une maquette de votre nouvelle page d'accueil, sans engagement. Cela vous intéresse ?",
   ].join("\n"),
 };
 

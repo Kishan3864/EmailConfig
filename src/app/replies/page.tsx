@@ -3,6 +3,8 @@ import { C, rows, type Reply, type Message } from "@/lib/fsdb";
 import { Badge, EmptyState, MailPreview, NextStep, PageHeader } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { Info } from "@/components/Info";
+import { englishOf } from "@/lib/english";
+import { LANGS } from "@/lib/lang";
 import { fmt } from "@/lib/time";
 import { getT } from "@/lib/i18n-server";
 
@@ -69,6 +71,9 @@ export default async function Replies({ searchParams }: { searchParams: Promise<
         // a bounce comes from the mail server (mailer-daemon@…): name the lead whose address bounced (lead id = its email key)
         const leadAddr = m?.leadEmail || (bounce && r.leadId) || undefined;
         const name = m?.businessName || leadAddr || r.fromEmail;
+        // the English of the mail I sent: only a translation made from its exact text (never a stale one)
+        const en = m ? englishOf(m) : null;
+        const sentEn = en?.kind === "ready" ? en : null;
         return (
           <article key={r.id} className="card space-y-4">
             <header className="flex items-start gap-3">
@@ -95,9 +100,9 @@ export default async function Replies({ searchParams }: { searchParams: Promise<
                   <span className="min-w-0 flex-1 truncate">{t("Aapki bheji mail:", "Mail you sent:")} <span className="font-medium text-slate-800">{m.subject}</span> ({fmt(m.sentAt)})</span>
                   <Icon name="chevron-down" size={14} className="text-slate-400 transition group-open:rotate-180" />
                 </summary>
-                <div className={`grid gap-3 border-t border-slate-200/80 p-3 ${m.bodyEn ? "md:grid-cols-2" : ""}`}>
-                  <MailPreview label={t("Aapki mail", "Your mail")} subject={m.subject} text={m.body} />
-                  {m.bodyEn && <MailPreview label="English translation" tone="translation" subject={m.subjectEn || undefined} text={m.bodyEn} />}
+                <div className={`grid gap-3 border-t border-slate-200/80 p-3 ${sentEn ? "md:grid-cols-2" : ""}`}>
+                  <MailPreview label={sentEn ? `${t("Aapki mail", "Your mail")} · ${LANGS[m.language] || (m.language || "—").toUpperCase()}` : t("Aapki mail", "Your mail")} subject={m.subject} text={m.body} />
+                  {sentEn && <MailPreview label="English translation" tone="translation" subject={sentEn.subject || undefined} text={sentEn.body} />}
                 </div>
               </details>
             )}

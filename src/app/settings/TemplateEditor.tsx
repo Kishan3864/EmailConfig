@@ -4,18 +4,23 @@ import { Field } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { Info } from "@/components/Info";
 import { useT } from "@/components/lang";
+import { forChip, forText } from "@/components/siteText";
 import { LANGS } from "@/lib/lang";
-import type { TemplateId } from "@/lib/templates";
-import { EXAMPLE_LEAD, ruleText, tryTemplate } from "./template-check";
+import { TEMPLATE_FOR, toTemplateFor, tplNo, type TemplateFor, type TemplateId } from "@/lib/templates";
+import { EXAMPLE_LEAD, EXAMPLE_SITE, ruleText, tryTemplate } from "./template-check";
 
-type Tpl = { id: TemplateId; name: string; subject: string; body: string };
-type Key = "name" | "subject" | "body";
+type Tpl = { id: TemplateId; name: string; subject: string; body: string; for: TemplateFor };
+type Key = "name" | "subject" | "body" | "for";
 
 const SUBHEAD = "flex min-w-0 items-center gap-1.5 text-2xs font-bold uppercase tracking-wider text-slate-400";
 const OK_CHIP = "bg-emerald-50 text-emerald-700 ring-emerald-600/20";
 const BAD_CHIP = "bg-amber-50 text-amber-700 ring-amber-600/20";
 // these three rules have their own chip; every other broken rule is listed in words below them
 const CHIP_RULES = /^(body has \d+ words|no question as call to action|link in body)/;
+// the "Kiske liye" tag: grey for any lead, violet for leads without a website, sky for leads with one
+const FOR_CHIP: Record<TemplateFor, string> = { any: "bg-slate-100 text-slate-500", nosite: "bg-violet-50 text-violet-700", site: "bg-sky-50 text-sky-700" };
+// {{website}} with or without a {{website|text}} default
+const SITE_VAR = /\{\{\s*website\s*(?:\|[^}]*)?\}\}/i;
 
 /** "tpl1" + "body" → "tpl1Body": the Settings field the form saves. */
 const fieldName = (id: TemplateId, k: Key) => `${id}${k[0].toUpperCase()}${k.slice(1)}`;
@@ -28,10 +33,17 @@ function Chip({ ok, children }: { ok?: boolean; children: ReactNode }) {
   );
 }
 
+/** The template's tag as a tiny chip: "Bina website" / "Website wale" / "Sab". */
+function ForChip({ f }: { f: TemplateFor }) {
+  const { t } = useT();
+  return <span className={`inline-flex h-4 shrink-0 items-center rounded px-1 text-2xs font-semibold ${FOR_CHIP[f]}`}>{forChip(f, t)}</span>;
+}
+
 /**
  * Settings → Email templates. The fields are plain fields of the settings form (saved with "Settings save karo").
- * One template is open at a time; the others stay in the form, hidden, so all three are always saved.
+ * One template is open at a time; the others stay in the form, hidden, so all six are always saved.
  * The preview fills the typed text with an example lead and runs the same rules every draft must pass.
+ * A template tagged for leads with a website is previewed with an example lead that has one ({{website}} filled).
  */
 export function TemplateEditor({ templates, senderName, business }: { templates: Tpl[]; senderName: string; business: string }) {
   const { t } = useT();
@@ -55,20 +67,31 @@ export function TemplateEditor({ templates, senderName, business }: { templates:
   }, []);
 
   const set = (id: TemplateId, k: Key, v: string) => setVals((xs) => xs.map((x) => (x.id === id ? { ...x, [k]: v } : x)));
-  const results = vals.map((x) => tryTemplate(x.subject, x.body, me, full));
-  const lead = full
-    ? [EXAMPLE_LEAD.businessName, EXAMPLE_LEAD.contactName, EXAMPLE_LEAD.city, EXAMPLE_LEAD.category, EXAMPLE_LEAD.country].join(" · ")
-    : t(`${EXAMPLE_LEAD.businessName} (baaki details khaali)`, `${EXAMPLE_LEAD.businessName} (no other details)`);
+  const results = vals.map((x) => tryTemplate(x.subject, x.body, me, full, x.for === "site"));
+  /** The "Example lead" line under the preview; a "Website wale" template's lead has a website. */
+  const leadLine = (site: boolean) => {
+    const web = site ? EXAMPLE_SITE : t("website nahi", "no website");
+    return full
+      ? [EXAMPLE_LEAD.businessName, EXAMPLE_LEAD.contactName, EXAMPLE_LEAD.city, EXAMPLE_LEAD.category, EXAMPLE_LEAD.country, web].join(" · ")
+      : site
+        ? t(`${EXAMPLE_LEAD.businessName} · ${EXAMPLE_SITE} (baaki details khaali)`, `${EXAMPLE_LEAD.businessName} · ${EXAMPLE_SITE} (no other details)`)
+        : t(`${EXAMPLE_LEAD.businessName} (baaki details khaali)`, `${EXAMPLE_LEAD.businessName} (no other details)`);
+  };
 
   return (
     <div ref={box} className="space-y-4">
-      <div role="tablist" aria-label="Templates" className="seg max-sm:grid max-sm:w-full max-sm:grid-cols-3">
+      {/* six tabs in 3 columns, two rows: up to md the tag sits under "Template N"; wider, one line, and the name from xl */}
+      <div role="tablist" aria-label="Templates" className="seg grid w-full grid-cols-3">
         {vals.map((x, i) => (
           <button key={x.id} type="button" role="tab" id={`${x.id}-tab`} aria-controls={`${x.id}-panel`} aria-selected={open === x.id}
-            onClick={() => setOpen(x.id)} className={`seg-item justify-center ${open === x.id ? "seg-item-on" : ""}`}>
-            <span aria-hidden className={`h-1.5 w-1.5 shrink-0 rounded-full ${results[i].ok ? "bg-emerald-500" : "bg-amber-500"}`} />
-            Template {i + 1}
-            {x.name.trim() && <span className="hidden max-w-[11rem] truncate font-normal text-slate-400 sm:inline">{x.name}</span>}
+            onClick={() => setOpen(x.id)}
+            className={`seg-item min-w-0 justify-center max-md:h-auto max-md:flex-col max-md:gap-1 max-md:px-1 max-md:py-1.5 xl:justify-start ${open === x.id ? "seg-item-on" : ""}`}>
+            <span className="inline-flex items-center gap-1.5">
+              <span aria-hidden className={`h-1.5 w-1.5 shrink-0 rounded-full ${results[i].ok ? "bg-emerald-500" : "bg-amber-500"}`} />
+              {tplNo(x.id)}
+            </span>
+            <ForChip f={x.for} />
+            {x.name.trim() && <span className="hidden min-w-0 truncate font-normal text-slate-400 xl:inline">{x.name}</span>}
             <span className="sr-only">{results[i].ok ? t("(rules theek)", "(rules OK)") : t("(rules fail)", "(rules fail)")}</span>
           </button>
         ))}
@@ -78,18 +101,38 @@ export function TemplateEditor({ templates, senderName, business }: { templates:
         const r = results[i];
         const lang = LANGS[r.lang] || r.lang.toUpperCase();
         const others = r.errors.filter((e) => !CHIP_RULES.test(e));
+        // {{website}} is only filled for leads with a website of their own
+        const siteNote = SITE_VAR.test(`${x.subject}\n${x.body}`) && x.for !== "site"
+          ? x.for === "nosite"
+            ? t(
+              "{{website}} sirf un leads ke liye bharta hai jinki apni website hai. Ye template bina website wale leads ke liye hai, isliye yahan ye aam taur pe khaali (ya default text) rahega; par agar campaign ise website wale leads ko bhi bheje (ek template sabko, ya ‘Jinki website HAI’ wali jagah), to unki website bhar jayegi. Ise hata do.",
+              "{{website}} is only filled for leads with a website of their own. This template is meant for leads without one, so here it normally stays empty (or shows its default); but if a campaign also sends it to leads with a website (one template for everyone, or the ‘Leads with a website’ slot), their domain is filled in. Better remove it.",
+            )
+            : t(
+              "‘Sabke liye’ template mein {{website}} sirf website wale leads ke liye bharta hai, baaki ke liye khaali (ya default text) rehta hai. Unki website ki baat karni hai to ‘Kiske liye’ mein ‘Jinki website HAI’ chuno.",
+              "In an ‘Any lead’ template, {{website}} is only filled for leads with a website; for the others it stays empty (or shows its default). To talk about their website, set ‘Written for’ to ‘Leads with a website’.",
+            )
+          : null;
         return (
           <div key={x.id} role="tabpanel" id={`${x.id}-panel`} aria-labelledby={`${x.id}-tab`} hidden={open !== x.id}
             className={open === x.id ? "grid gap-x-6 gap-y-5 lg:grid-cols-2" : "hidden"}>
             <div className="min-w-0 space-y-3">
-              <div className="grid gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <Field label={t("Template ka naam", "Template name")} info={t(
-                  `Sirf aapke pehchanne ke liye. Campaign banate waqt ‘Mail kaise banegi’ list mein ‘Template ${i + 1}: naam’ dikhta hai. Lead ko ye naam kabhi nahi dikhta.`,
-                  `Only for you to recognise it. When you create a campaign, ‘How mails are written’ lists it as ‘Template ${i + 1}: name’. Leads never see this name.`,
+                  `Sirf aapke pehchanne ke liye. Campaign banate waqt ‘Mail kaise banegi’ list mein ‘${tplNo(x.id)}: naam’ dikhta hai. Lead ko ye naam kabhi nahi dikhta.`,
+                  `Only for you to recognise it. When you create a campaign, ‘How mails are written’ lists it as ‘${tplNo(x.id)}: name’. Leads never see this name.`,
                 )}>
                   <input name={fieldName(x.id, "name")} defaultValue={x.name} onChange={(e) => set(x.id, "name", e.target.value)} className="input" />
                 </Field>
-                <Field label="Subject" info={t(
+                <Field label={t("Kiske liye", "Written for")} info={t(
+                  "Ye template kin leads ke liye likha hai. Campaign mein ‘Website ke hisaab se 2 templates’ chuno to app isi tag se templates suggest karta hai: jin leads ki apni website nahi hai unhe ‘Jinki website NAHI hai’ wala template, baaki sabko ‘Jinki website HAI’ wala. ‘Sabke liye’ dono mein chal jaata hai. Facebook, Instagram, Google Maps ya booking site ka link apni website nahi ginta. ‘Jinki website HAI’ chuno to preview ki example lead ki bhi website hoti hai.",
+                  "Which leads this template is written for. When a campaign uses ‘Two templates, by website’, the app suggests templates by this tag: leads without a website of their own get a ‘Leads without a website’ template, all others a ‘Leads with a website’ one. ‘Any lead’ fits either. A Facebook, Instagram, Google Maps or booking-site link does not count as their own website. With ‘Leads with a website’, the preview's example lead has a website too.",
+                )}>
+                  <select name={fieldName(x.id, "for")} defaultValue={x.for} onChange={(e) => set(x.id, "for", toTemplateFor(e.target.value))} className="input">
+                    {TEMPLATE_FOR.map((f) => <option key={f} value={f}>{forText(f, t)}</option>)}
+                  </select>
+                </Field>
+                <Field className="sm:col-span-2" label="Subject" info={t(
                   "Mail ka subject. Placeholders yahan bhi chalte hain, jaise {{business}}. 90 akshar tak, aur ‘Re:’ ya ‘Fwd:’ se shuru nahi ho sakta.",
                   "The mail's subject. Placeholders work here too, e.g. {{business}}. Up to 90 characters, and it cannot start with ‘Re:’ or ‘Fwd:’.",
                 )}>
@@ -109,8 +152,8 @@ export function TemplateEditor({ templates, senderName, business }: { templates:
                 <span className={SUBHEAD}>
                   <Icon name="eye" size={12} />Preview
                   <Info title="Preview" size={12} text={t(
-                    "Aapka likha text, ek example lead ke saath bhara hua: lead ko bilkul aisi hi mail jaati hai, neeche signature aur footer ke saath. Typing ke saath badalta hai. ‘Sirf business naam’ dabao to dikhega ki contact, city ya category khaali hone pe {{x|text}} wala text kaise aata hai. Neeche wahi rules check hote hain jo har draft ko pass karne hote hain.",
-                    "Your text filled in with an example lead: the lead gets exactly this mail, with the signature and footer below it. It changes as you type. Press ‘Business name only’ to see how the {{x|text}} text shows when contact, city or category are empty. Below it, the same rules are checked that every draft has to pass.",
+                    `Aapka likha text, ek example lead ke saath bhara hua: lead ko bilkul aisi hi mail jaati hai, neeche signature aur footer ke saath. Typing ke saath badalta hai. ‘Sirf business naam’ dabao to dikhega ki contact, city ya category khaali hone pe {{x|text}} wala text kaise aata hai. ‘Jinki website HAI’ wale template ki example lead ki website ${EXAMPLE_SITE} hai ({{website}} isi se bharta hai); baaki templates mein lead ki koi website nahi. Neeche wahi rules check hote hain jo har draft ko pass karne hote hain.`,
+                    `Your text filled in with an example lead: the lead gets exactly this mail, with the signature and footer below it. It changes as you type. Press ‘Business name only’ to see how the {{x|text}} text shows when contact, city or category are empty. For a ‘Leads with a website’ template the example lead's website is ${EXAMPLE_SITE} ({{website}} is filled with it); in the other templates the lead has no website. Below it, the same rules are checked that every draft has to pass.`,
                   )} />
                 </span>
                 <div role="group" aria-label={t("Example lead", "Example lead")} className="seg">
@@ -125,7 +168,10 @@ export function TemplateEditor({ templates, senderName, business }: { templates:
                   <Icon name="plus" size={11} />{t("Signature aur footer apne aap neeche lagte hain", "The signature and footer are added below automatically")}
                 </div>
               </div>
-              <p className="mt-1.5 break-words text-2xs text-slate-400">{t("Example lead", "Example lead")}: {lead}</p>
+              <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 break-words text-2xs text-slate-400">
+                <ForChip f={x.for} />
+                <span className="min-w-0 break-words">{t("Example lead", "Example lead")}: {leadLine(x.for === "site")}</span>
+              </p>
 
               <ul className="mt-3 flex flex-wrap gap-1.5" aria-label={t("Rules check", "Rules check")}>
                 <Chip ok={r.words >= 60 && r.words <= 110}>{r.words} words (60–110)</Chip>
@@ -145,6 +191,11 @@ export function TemplateEditor({ templates, senderName, business }: { templates:
                     </li>
                   ))}
                 </ul>
+              )}
+              {siteNote && (
+                <p className="mt-2 flex items-start gap-1.5 text-xs text-slate-600">
+                  <Icon name="info" size={12} className="mt-0.5 shrink-0 text-slate-400" /><span className="min-w-0 break-words">{siteNote}</span>
+                </p>
               )}
               <p className={`mt-2.5 flex items-start gap-1.5 text-xs ${r.ok ? "text-emerald-700" : "text-amber-700"}`}>
                 <Icon name={r.ok ? "check-circle" : "alert"} size={13} className="mt-px shrink-0" />

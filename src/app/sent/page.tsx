@@ -1,7 +1,14 @@
 import Link from "next/link";
-import { C, rows, type SendLog } from "@/lib/fsdb";
+import { fullText, signature } from "@/lib/compose";
+import { englishOf, textKey, type EnglishState } from "@/lib/english";
+import { C, rows, type Message, type SendLog } from "@/lib/fsdb";
 import { getT } from "@/lib/i18n-server";
+import { LANGS } from "@/lib/lang";
+import { getAllChunked } from "@/lib/ledger";
+import { getSettings } from "@/lib/settings";
 import { DISPLAY_TZ, dayStart, fmt, fmtDate, partsIn, zoned } from "@/lib/time";
+import { EnglishMail } from "@/components/EnglishMail";
+import { translateMessage } from "../actions";
 import { Icon } from "@/components/icons";
 import { Info } from "@/components/Info";
 import { ToastOnMount } from "@/components/toast";
@@ -12,7 +19,9 @@ export async function generateMetadata() {
   return { title: t("Bheji gayi mails", "Sent mails") };
 }
 
-type Row = SendLog & { subject?: string; text?: string; withLogo?: boolean; business?: string; leadEmail?: string };
+type Row = SendLog & { subject?: string; text?: string; textKey?: string; withLogo?: boolean; business?: string; leadEmail?: string; campaignId?: string };
+/** The message a sent row went out from: its language, and its English (null = the text changed after this send). */
+type Side = { id: string; lang: string; en: EnglishState | null; campaignId: string };
 
 const dayKey = (d: Date) => partsIn(d, DISPLAY_TZ).dayKey;
 function startOf(key: string) {
@@ -43,6 +52,36 @@ export default async function Sent({ searchParams }: { searchParams: Promise<{ d
   const shown = mode === "dry" ? dry : mode === "all" ? all : live;
   const failed = all.filter((l) => !l.ok).length;
   const active = mode === "dry" || mode === "all" ? mode : "live"; // unknown ?mode= shows the live list
+
+  // The English next to each sent mail: the message it went out from (message doc id = lead id), read once for the
+  // rows shown. Its translation counts only for the text that went out: a mail sent in dry-run can still be edited or
+  // remade before the live send, and then its English no longer matches this row.
+  const msgIds = [...new Set(shown.map((l) => l.messageId || l.leadId).filter((x): x is string => !!x))];
+  const msgs = new Map<string, Message>();
+  for (const d of await getAllChunked(msgIds.map((id) => C.messages.doc(id)))) if (d.exists) msgs.set(d.id, { id: d.id, ...d.data() } as Message);
+  // older rows (no fingerprint) are compared up to the signature, so a mail whose last paragraphs were deleted later
+  // does not pass as the same; when in doubt the English is not shown
+  const s = msgs.size ? await getSettings() : null;
+  const sides = new Map<string, Side>();
+  for (const l of shown) {
+    const m = msgs.get(l.messageId || l.leadId || "");
+    if (!m) continue;
+    // the text that went out = body + signature + footer (lib/compose.ts)
+    // rows logged since the fingerprint exist compare it exactly; older rows fall back to comparing the text
+    const same = l.textKey
+      ? l.textKey === textKey(m.subject, m.body)
+      : (!l.subject || l.subject === m.subject) && !!l.text && !!s && l.text.startsWith(`${m.body.trim()}\n\n${signature(s)}`);
+    sides.set(l.id, { id: m.id, lang: m.language, en: same || m.language === "en" ? englishOf(m) : null, campaignId: l.campaignId || m.campaignId || "" });
+  }
+  // The English mirrors the full sent text: English body + signature + English footer, whose source line comes from
+  // the campaign's list as in lib/sender.ts (read only where an English text is shown, once per campaign / list)
+  const campIds = [...new Set([...sides.values()].filter((x) => x.en?.kind === "ready").map((x) => x.campaignId))];
+  const campSnaps = await getAllChunked(campIds.filter(Boolean).map((id) => C.campaigns.doc(id)));
+  const listOf = new Map(campSnaps.filter((d) => d.exists).map((d) => [d.id, String(d.get("listId") || "")]));
+  const listSnaps = await getAllChunked([...new Set([...listOf.values()].filter(Boolean))].map((id) => C.lists.doc(id)));
+  const noteOf = new Map(listSnaps.filter((d) => d.exists).map((d) => [d.id, String(d.get("sourceNote") || "")]));
+  const sourceOf = (campaignId: string) => noteOf.get(listOf.get(campaignId) || "") || "a public business directory";
+  const langName = (lang?: string) => LANGS[lang || ""] || (lang || "—").toUpperCase();
   const tab = (m: string, label: string, n: number) => (
     <Link href={`/sent?day=${key}&mode=${m}`} className={`seg-item ${active === m ? "seg-item-on" : ""}`}>
       {label}
@@ -100,13 +139,52 @@ export default async function Sent({ searchParams }: { searchParams: Promise<{ d
   const info = t(
     `Din ke hisaab se dekho kaunsi mail kab, kisko aur kis text ke saath gayi.
 ‹ › se din badlo, aur Live / Dry-run / Sab se list filter karo.
-Kisi bhi mail pe click karo: poora text aur mail server ka jawab khul jayega.`,
+Kisi bhi mail pe click karo: poora text aur mail server ka jawab khul jayega.
+Left mein mail bilkul waise hai jaise gayi (lead ki bhasha mein); right mein usi mail ka English matlab, sirf aapke check ke liye.`,
     `See day by day which mail went out when, to whom and with what text.
 Change the day with ‹ ›, and filter the list with Live / Dry-run / All.
-Click any mail to open its full text and the mail server's reply.`,
+Click any mail to open its full text and the mail server's reply.
+The left shows the mail exactly as it went out (in the lead's language); the right shows the same mail's meaning in English, only for you to check.`,
   );
   const noSubject = t("(subject save nahi hua)", "(subject not recorded)");
   const serverReply = t("Server ka jawab", "Server reply");
+
+  /** Recipient, time, server reply and contact link: a side column next to a lone mail, a strip under a mail + English. */
+  const meta = (l: Row, under: boolean) => {
+    const kv = (
+      <>
+        <KV label={l.dryRun ? t("Kisko gayi (test address)", "Sent to (test address)") : t("Kisko gayi", "Sent to")}>{l.to}</KV>
+        {l.dryRun && l.leadEmail && <KV label="Lead">{l.leadEmail}</KV>}
+        <KV label={t("Samay", "Time")}>{fmt(l.at)}</KV>
+      </>
+    );
+    const reply = (
+      <div>
+        <div className="flex items-center gap-1 text-xs font-medium text-slate-400">
+          {serverReply}
+          <Info title={serverReply} size={12}
+            text={t(
+              "Mail server (SMTP) ne mail lete waqt jo jawab diya. '250' se shuru ho to mail accept ho gayi. Fail hone pe yahan wajah dikhti hai.",
+              "What the mail server (SMTP) answered when it took the mail. If it starts with '250', the mail was accepted. If it failed, the reason shows here.",
+            )} />
+        </div>
+        <div className="mt-1 break-all rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs leading-relaxed text-slate-600">{l.response || "—"}</div>
+      </div>
+    );
+    const history = l.leadId && (
+      <Link href={`/contacts/${encodeURIComponent(l.leadId)}`} className="link inline-flex items-center gap-1 text-sm">
+        {t("Contact ki history", "Contact history")}<Icon name="arrow-right" size={13} />
+      </Link>
+    );
+    return under ? (
+      <div className="space-y-3 border-t border-slate-100 pt-4">
+        <div className="flex flex-wrap items-end gap-x-8 gap-y-3">{kv}{history && <div className="sm:ml-auto">{history}</div>}</div>
+        {reply}
+      </div>
+    ) : (
+      <div className="min-w-0 space-y-3">{kv}{reply}{history}</div>
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -175,54 +253,64 @@ Click any mail to open its full text and the mail server's reply.`,
 
       {shown.length > 0 ? (
         <div className="space-y-2">
-          {shown.map((l) => (
-            <details key={l.id} className="card-flush group">
-              <summary className="cursor-pointer select-none px-4 py-3 transition hover:bg-slate-50/70 sm:px-5">
-                <div className="flex items-start gap-3 sm:items-center">
-                  <span className="w-10 shrink-0 pt-px text-xs font-semibold tabular-nums text-slate-500 sm:pt-0">{clock(l.at)}</span>
-                  <div className="min-w-0 flex-1 sm:flex sm:items-center sm:gap-4">
-                    {/* the subject is what people scan: it keeps 12rem, the name and address columns give way first (same widths on every row, so they stay aligned) */}
-                    <div className="flex min-w-0 items-center gap-2 sm:w-56 xl:w-72">
-                      <Badge v={l.ok ? (l.dryRun ? "dry-run" : "sent") : "failed"} />
-                      <span className="truncate text-sm font-medium text-slate-900">{l.business || l.leadEmail || l.to}</span>
-                    </div>
-                    <div className="mt-1 truncate text-xs text-slate-500 sm:mt-0 sm:w-48 xl:w-60">{l.dryRun ? `${l.leadEmail || "Lead"} → test address` : l.to}</div>
-                    <div className="mt-0.5 truncate text-sm text-slate-700 sm:mt-0 sm:min-w-[12rem] sm:flex-1">{l.subject || noSubject}</div>
+          {shown.map((l) => {
+            const sd = sides.get(l.id);
+            const sent = (
+              <MailPreview label={sd ? `${t("Mail jo gayi", "Mail as sent")} · ${langName(sd.lang)}` : t("Mail jo gayi", "Mail as sent")}
+                subject={l.subject || noSubject} text={l.text || t("(text save nahi hua)", "(text not recorded)")}
+                footer={l.withLogo ? (
+                  <div className="flex items-center gap-1.5 border-t border-slate-100 px-3 py-2 text-xs text-slate-500">
+                    <Icon name="check" size={12} className="text-emerald-600" />{t("Logo ke saath gayi (signature mein)", "Sent with the logo (in the signature)")}
                   </div>
-                  <Icon name="chevron-down" size={16} className="mt-px text-slate-400 transition-transform group-open:rotate-180 sm:mt-0" />
-                </div>
-              </summary>
-              <div className="grid gap-4 border-t border-slate-100 px-4 py-4 sm:px-5 lg:grid-cols-[minmax(0,1fr)_280px] lg:gap-6">
-                <MailPreview label={t("Mail jo gayi", "Mail as sent")} subject={l.subject || noSubject} text={l.text || t("(text save nahi hua)", "(text not recorded)")}
-                  footer={l.withLogo ? (
-                    <div className="flex items-center gap-1.5 border-t border-slate-100 px-3 py-2 text-xs text-slate-500">
-                      <Icon name="check" size={12} className="text-emerald-600" />{t("Logo ke saath gayi (signature mein)", "Sent with the logo (in the signature)")}
+                ) : undefined} />
+            );
+            return (
+              <details key={l.id} className="card-flush group">
+                <summary className="cursor-pointer select-none px-4 py-3 transition hover:bg-slate-50/70 sm:px-5">
+                  <div className="flex items-start gap-3 sm:items-center">
+                    <span className="w-10 shrink-0 pt-px text-xs font-semibold tabular-nums text-slate-500 sm:pt-0">{clock(l.at)}</span>
+                    <div className="min-w-0 flex-1 sm:flex sm:items-center sm:gap-4">
+                      {/* the subject is what people scan: it keeps 12rem, the name and address columns give way first (same widths on every row, so they stay aligned) */}
+                      <div className="flex min-w-0 items-center gap-2 sm:w-56 xl:w-72">
+                        <Badge v={l.ok ? (l.dryRun ? "dry-run" : "sent") : "failed"} />
+                        <span className="truncate text-sm font-medium text-slate-900">{l.business || l.leadEmail || l.to}</span>
+                      </div>
+                      <div className="mt-1 truncate text-xs text-slate-500 sm:mt-0 sm:w-48 xl:w-60">{l.dryRun ? `${l.leadEmail || "Lead"} → test address` : l.to}</div>
+                      <div className="mt-0.5 truncate text-sm text-slate-700 sm:mt-0 sm:min-w-[12rem] sm:flex-1">{l.subject || noSubject}</div>
                     </div>
-                  ) : undefined} />
-                <div className="min-w-0 space-y-3">
-                  <KV label={l.dryRun ? t("Kisko gayi (test address)", "Sent to (test address)") : t("Kisko gayi", "Sent to")}>{l.to}</KV>
-                  {l.dryRun && l.leadEmail && <KV label="Lead">{l.leadEmail}</KV>}
-                  <KV label={t("Samay", "Time")}>{fmt(l.at)}</KV>
-                  <div>
-                    <div className="flex items-center gap-1 text-xs font-medium text-slate-400">
-                      {serverReply}
-                      <Info title={serverReply} size={12}
-                        text={t(
-                          "Mail server (SMTP) ne mail lete waqt jo jawab diya. '250' se shuru ho to mail accept ho gayi. Fail hone pe yahan wajah dikhti hai.",
-                          "What the mail server (SMTP) answered when it took the mail. If it starts with '250', the mail was accepted. If it failed, the reason shows here.",
-                        )} />
-                    </div>
-                    <div className="mt-1 break-all rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs leading-relaxed text-slate-600">{l.response || "—"}</div>
+                    <Icon name="chevron-down" size={16} className="mt-px text-slate-400 transition-transform group-open:rotate-180 sm:mt-0" />
                   </div>
-                  {l.leadId && (
-                    <Link href={`/contacts/${encodeURIComponent(l.leadId)}`} className="link inline-flex items-center gap-1 text-sm">
-                      {t("Contact ki history", "Contact history")}<Icon name="arrow-right" size={13} />
-                    </Link>
-                  )}
-                </div>
-              </div>
-            </details>
-          ))}
+                </summary>
+                {sd ? (
+                  // left: the mail exactly as it went out; right: the same mail in English (only for checking, never sent)
+                  <div className="space-y-4 border-t border-slate-100 px-4 py-4 sm:px-5">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      {sent}
+                      {sd.en ? (
+                        <EnglishMail en={sd.en} text={sd.en.kind === "ready" && s ? fullText(s, sd.en.body, "en", sourceOf(sd.campaignId)) : undefined}
+                          action={sd.en.kind === "pending" ? translateMessage.bind(null, sd.id) : undefined} />
+                      ) : (
+                        <div className="min-w-0">
+                          <div className="mb-1.5 flex items-center gap-1.5 text-2xs font-bold uppercase tracking-wider text-slate-400"><Icon name="globe" size={12} />English translation</div>
+                          <div className="rounded-lg border border-dashed border-slate-200 px-4 py-6 text-center text-xs leading-relaxed text-slate-500">
+                            <Icon name="info" size={16} className="mx-auto mb-1.5 text-slate-400" />
+                            {t("Ye mail jaane ke baad iska text badla (edit ya naya version), isliye iska English yahan nahi dikhaya. Nayi mail ka English contact page pe hai.",
+                              "The text was changed after this mail went out (an edit or a new version), so its English is not shown here. The new mail's English is on the contact page.")}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    {meta(l, true)}
+                  </div>
+                ) : (
+                  <div className="grid gap-4 border-t border-slate-100 px-4 py-4 sm:px-5 lg:grid-cols-[minmax(0,1fr)_280px] lg:gap-6">
+                    {sent}
+                    {meta(l, false)}
+                  </div>
+                )}
+              </details>
+            );
+          })}
         </div>
       ) : (
         <div className="card">

@@ -6,22 +6,37 @@ import { Badge, Callout, MailPreview, NextStep, PageHeader, Section, type Tone }
 import { Icon, type IconName } from "@/components/icons";
 import { Info } from "@/components/Info";
 import { ActionButton } from "@/components/ActionButton";
+import { EnglishMail } from "@/components/EnglishMail";
 import { ToastOnMount } from "@/components/toast";
 import { knownItems, parseFacts, siteNote } from "@/components/factChips";
+import { forText, siteText } from "@/components/siteText";
 import { fmt } from "@/lib/time";
 import type { T } from "@/lib/i18n";
 import { getT } from "@/lib/i18n-server";
+import { fullText } from "@/lib/compose";
+import { englishOf } from "@/lib/english";
+import { LANGS } from "@/lib/lang";
 import { knowsWhatTheyDo } from "@/lib/leadinfo";
 import { getSettings } from "@/lib/settings";
-import { isTemplateId, templateOf } from "@/lib/templates";
-import { approveLead, rejectLead, markCheckedSent, markCheckedNotSent } from "../../actions";
+import { isTemplateId, mailPlan, templateForLead, templateLabel, templateOf, tplNo } from "@/lib/templates";
+import { siteStatus } from "@/lib/website";
+import { approveLead, rejectLead, markCheckedSent, markCheckedNotSent, translateMessage } from "../../actions";
 
 export async function generateMetadata() {
   const { t } = await getT();
   return { title: t("Contact", "Contact") };
 }
 
-type Mail = Message & { approved?: boolean };
+/** When it goes out, the sender saves the exact text (sentText). */
+type Mail = Message & { approved?: boolean; sentText?: string };
+// the footer source the sender uses when the list has no "Kahan se mile" note (same fallback as sender.ts)
+const NO_SOURCE = "a public business directory";
+
+/** Same labels as the Campaign page: the saved text of a mail that went out (or may have), else today's build of it. */
+function mailLabel(m: Mail, t: T) {
+  if (m.sentText) return m.status === "sent" || m.status === "bounced" ? t("Mail jo gayi", "Mail as sent") : t("Mail jo bhejne ki koshish hui", "Mail we tried to send");
+  return ["ready", "sending", "retry"].includes(m.status) ? t("Mail (jaisi jayegi)", "Mail (as it will go out)") : t("Mail (footer aaj ki settings se)", "Mail (footer from today's settings)");
+}
 /** A UI text in both languages; shown with t(x.hi, x.en). */
 type Text = { hi: string; en: string };
 
@@ -47,6 +62,11 @@ const EV: Record<string, [Text, IconName, Tone]> = {
 };
 // a draft in a template campaign: no AI involved (a lead's campaign, and so its mail type, never changes)
 const DRAFT_TPL: Text = { hi: "Draft bana (template se mail bani)", en: "Draft created (made from the template)" };
+// the two sides of the mail section
+const SIDES: Text = {
+  hi: "Left mein wahi mail hai jo lead ko jaati hai (uski bhasha mein); right mein usi mail ka English matlab, sirf aapke check ke liye.",
+  en: "The left shows the mail exactly as the lead gets it (in its language); the right shows the same mail's meaning in English, only for you to check.",
+};
 const DOT: Record<Tone, string> = {
   slate: "bg-slate-100 text-slate-500", sky: "bg-sky-50 text-sky-600", amber: "bg-amber-50 text-amber-600", emerald: "bg-emerald-50 text-emerald-600",
   violet: "bg-violet-50 text-violet-600", red: "bg-red-50 text-red-600", orange: "bg-orange-50 text-orange-600", indigo: "bg-indigo-50 text-indigo-600",
@@ -226,9 +246,19 @@ export default async function Contact({ params }: { params: Promise<{ id: string
   const lg = ledger.exists ? { status: String(ledger.get("status") || ""), at: ledger.get("at") as string | undefined } : null;
   const serverReply = t("Server ka jawab:", "Server reply:");
 
-  // a template campaign fills a fixed text, so the AI never writes this lead's mail
-  const tpl = cd && isTemplateId(cd.mailType) ? templateOf(s, cd.mailType) : null;
-  const tplName = tpl ? (tpl.name || "").trim() || `Template ${tpl.id.slice(3)}` : "";
+  // a template campaign fills a fixed text, so the AI never writes this lead's mail. The draft records its template;
+  // an older draft (or no draft yet) gets the one the campaign picks for this lead ("by website": by its own website)
+  const own = siteStatus(l.website);
+  const draftTpl = m?.tplId;
+  const tplId = isTemplateId(draftTpl) ? draftTpl : (cd && templateForLead(cd, l.website)?.id) || null;
+  const tpl = tplId ? templateOf(s, tplId) : null;
+  const tplName = tplId ? templateLabel(s, tplId) : "";
+  const bySite = !!cd && mailPlan(cd).kind === "bysite";
+  // a template written for the other group (e.g. a "no website" text for a lead with its own website): worth a look before it goes out
+  const tplOff = !!tpl && tpl.for !== "any" && (tpl.for === "site") !== own.has && (!m || m.status === "ready");
+  // right side of the mail: the same mail in English, made from its current text (lib/english.ts)
+  const en = m ? englishOf(m) : null;
+  const langName = m ? LANGS[m.language] || (m.language || "—").toUpperCase() : "";
   // what the AI may say about this lead: the same list the AI gets (knownFacts in lib/leadinfo.ts)
   const facts = parseFacts(l.facts);
   const known = knownItems(l, facts, lang);
@@ -328,6 +358,7 @@ export default async function Contact({ params }: { params: Promise<{ id: string
             {siteUrl
               ? <a href={siteUrl} target="_blank" rel="noreferrer" className="link break-all">{site}<Icon name="external" size={12} className="ml-1 inline-block align-[-1px]" /></a>
               : site || "—"}
+            {!own.has && own.why === "profile" && <span className="mt-0.5 block text-xs text-slate-500">{siteText(own, t)}</span>}
           </Row>
           <Row label="Phone">{l.phone || "—"}</Row>
           <Row label={t("Desh", "Country")}>{l.country || "—"}</Row>
@@ -420,25 +451,52 @@ export default async function Contact({ params }: { params: Promise<{ id: string
             {m.dryRunDone && <Badge v="dry-run" label={t("Dry-run mein gayi", "Sent in dry-run")} dot={false} />}
           </>
         ) : undefined}
-        sub={m ? `${tpl ? `${t(`Template se bani: ${tplName}`, `Written from template: ${tplName}`)} · ` : ""}${t("Bhasha", "Language")}: ${m.language || "—"} · ${m.sentAt ? t(`Bheji gayi: ${fmt(m.sentAt)}`, `Sent: ${fmt(m.sentAt)}`) : m.status === "retry" && m.nextAttemptAt ? t(`Agli koshish: ${fmt(m.nextAttemptAt)}`, `Next attempt: ${fmt(m.nextAttemptAt)}`) : t("Abhi bheji nahi gayi", "Not sent yet")}` : undefined}
+        sub={m ? `${tpl ? `${t(`${tplName} se bani`, `Made from ${tplName}`)} · ` : ""}${t("Bhasha", "Language")}: ${langName} · ${m.sentAt ? t(`Bheji gayi: ${fmt(m.sentAt)}`, `Sent: ${fmt(m.sentAt)}`) : m.status === "retry" && m.nextAttemptAt ? t(`Agli koshish: ${fmt(m.nextAttemptAt)}`, `Next attempt: ${fmt(m.nextAttemptAt)}`) : t("Abhi bheji nahi gayi", "Not sent yet")}` : undefined}
         info={tpl
-          ? t(`Is lead ke liye template (${tplName}) se bani mail: is campaign mein AI mail nahi likhta. Har lead ko sirf ek hi mail jaati hai. 'Approval baaki' = Approve page pe aapka intezaar; 'Approve ho gayi' = sending window mein apne aap jayegi.`,
-            `The mail made from the template (${tplName}) for this lead: in this campaign the AI does not write the mails. Each lead gets only one mail. 'Awaiting approval' = waiting for you on the Approve page; 'Approved' = goes out automatically in the sending window.`)
-          : t("Is lead ke liye AI ki likhi mail. Har lead ko sirf ek hi mail jaati hai. 'Approval baaki' = Approve page pe aapka intezaar; 'Approve ho gayi' = sending window mein apne aap jayegi. English translation sirf aapke padhne ke liye hai, lead ko original bhasha wali mail hi jaati hai.",
-            "The mail the AI wrote for this lead. Each lead gets only one mail. 'Awaiting approval' = waiting for you on the Approve page; 'Approved' = goes out automatically in the sending window. The English translation is only for you to read; the lead gets the mail in the original language.")}>
-        {m ? (
-          <div className={`grid gap-4 ${m.bodyEn ? "md:grid-cols-2" : ""}`}>
-            <MailPreview label={t("Mail ka text", "Mail text")} subject={m.subject} text={m.body}
+          ? t(`Is lead ke liye ${tplName} se bani mail: is campaign mein AI mail nahi likhta.${bySite ? " Campaign mein website ke hisaab se 2 templates hain: jinki website NAHI hai unhe ek, jinki website HAI unhe doosra." : ""} Har lead ko sirf ek hi mail jaati hai. 'Approval baaki' = Approve page pe aapka intezaar; 'Approve ho gayi' = sending window mein apne aap jayegi. ${SIDES.hi}`,
+            `The mail made from ${tplName} for this lead: in this campaign the AI does not write the mails.${bySite ? " The campaign uses two templates, by website: one for leads without a website, the other for leads with a website." : ""} Each lead gets only one mail. 'Awaiting approval' = waiting for you on the Approve page; 'Approved' = goes out automatically in the sending window. ${SIDES.en}`)
+          : t(`Is lead ke liye AI ki likhi mail. Har lead ko sirf ek hi mail jaati hai. 'Approval baaki' = Approve page pe aapka intezaar; 'Approve ho gayi' = sending window mein apne aap jayegi. ${SIDES.hi}`,
+            `The mail the AI wrote for this lead. Each lead gets only one mail. 'Awaiting approval' = waiting for you on the Approve page; 'Approved' = goes out automatically in the sending window. ${SIDES.en}`)}>
+        {tpl && (bySite || tplOff) && (
+          <div className="mb-4 space-y-1 text-xs">
+            <p className="flex items-start gap-1.5 text-slate-500">
+              <Icon name="globe" size={12} className="mt-0.5 shrink-0 text-slate-400" />
+              <span className="min-w-0 break-words">
+                {siteText(own, t)}
+                {bySite && t(
+                  <>. Isliye ise &quot;{forText(own.has ? "site" : "nosite", t)}&quot; wala template mila: <span className="font-medium text-slate-700">{tplName}</span></>,
+                  <>. So it gets the template for &quot;{forText(own.has ? "site" : "nosite", t)}&quot;: <span className="font-medium text-slate-700">{tplName}</span></>,
+                )}
+              </span>
+            </p>
+            {tplOff && (
+              <p className="flex items-start gap-1.5 text-amber-700">
+                <Icon name="alert" size={12} className="mt-0.5 shrink-0" />
+                <span className="min-w-0 break-words">
+                  {t(`Par ${tplNo(tpl.id)} "${forText(tpl.for, t)}" ke liye likha hai. Jaane se pehle mail ek baar dhyan se padh lo.`,
+                    `But ${tplNo(tpl.id)} is written for "${forText(tpl.for, t)}". Read the mail carefully before it goes out.`)}
+                </span>
+              </p>
+            )}
+          </div>
+        )}
+        {m && en ? (
+          // left: the mail exactly as the lead gets it (the text saved at sending, or body + signature + footer as it will go);
+          // right: the same mail in English, only for me
+          <div className="grid gap-4 md:grid-cols-2">
+            <MailPreview label={`${mailLabel(m, t)} · ${langName}`} subject={m.subject}
+              text={m.sentText || fullText(s, m.body, m.language, ls?.sourceNote || NO_SOURCE)}
               footer={m.error && !wentOut
                 ? <div className="break-words border-t border-red-100 bg-red-50/60 px-3 py-2 text-xs text-red-700"><span className="font-semibold">{t("Wajah:", "Reason:")}</span> {errText(m.error, t)}</div>
                 : m.smtpResponse ? <div className="break-words border-t border-slate-100 bg-slate-50/70 px-3 py-2 text-xs text-slate-500"><span className="font-medium">{serverReply}</span> <span className="font-mono">{m.smtpResponse}</span></div> : undefined} />
-            {m.bodyEn && <MailPreview label="English translation" tone="translation" subject={m.subjectEn || undefined} text={m.bodyEn} />}
+            <EnglishMail en={en} text={en.kind === "ready" ? fullText(s, en.body, "en", ls?.sourceNote || NO_SOURCE) : undefined}
+              action={m.status === "ready" || (en.kind === "pending" && m.status !== "rejected") ? translateMessage.bind(null, m.id) : undefined} />
           </div>
         ) : (
           <p className="text-sm text-slate-500">
             {tpl
-              ? t(`Is contact ke liye abhi mail nahi bani. Campaign chalne pe iski mail template (${tplName}) se banegi aur Approve page pe aayegi.`,
-                `No mail has been made for this contact yet. While the campaign runs, its mail is made from the template (${tplName}) and appears on the Approve page.`)
+              ? t(`Is contact ke liye abhi mail nahi bani. Campaign chalne pe iski mail ${tplName} se banegi aur Approve page pe aayegi.`,
+                `No mail has been made for this contact yet. While the campaign runs, its mail is made from ${tplName} and appears on the Approve page.`)
               : t("Is contact ke liye abhi mail nahi bani. Campaign chalne pe AI iski mail likhega aur wo Approve page pe aayegi.",
                 "No mail has been written for this contact yet. While the campaign runs, the AI writes its mail and it appears on the Approve page.")}
           </p>

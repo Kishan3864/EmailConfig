@@ -115,6 +115,7 @@ export function DraftEditor({ id, subject, body, language, businessName = "" }: 
               </div>
               <p className="border-t border-slate-100 pt-2 text-xs leading-relaxed text-slate-500">
                 {t("Save ke baad mail ko dobara approve karna hoga. Approve hamesha saved text ka hota hai.", "After saving, the mail must be approved again. Approval always applies to the saved text.")}
+                {language !== "en" && ` ${t("Right side ka English translation bhi naye text se dobara banega.", "The English translation on the right is made again from the new text.")}`}
               </p>
             </div>
           </div>

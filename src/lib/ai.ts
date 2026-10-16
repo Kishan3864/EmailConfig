@@ -5,14 +5,14 @@ import type { LeadExtra } from "./fsdb";
 import { knownFacts, knowsWhatTheyDo, type KnownKey } from "./leadinfo";
 import { validateDraft } from "./validate";
 
-export async function chat(messages: { role: string; content: string }[], s?: Settings, json = true): Promise<string> {
+export async function chat(messages: { role: string; content: string }[], s?: Settings, json = true, temperature = 0.6): Promise<string> {
   s = s || (await getSettings());
   const key = process.env.AI_API_KEY;
   if (!key) throw new Error("AI_API_KEY missing in .env");
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 60000);
   try {
-    const body: Record<string, unknown> = { model: s.aiModel, messages, temperature: 0.6 };
+    const body: Record<string, unknown> = { model: s.aiModel, messages, temperature };
     if (json) body.response_format = { type: "json_object" };
     let res = await fetch(s.aiBaseUrl.replace(/\/$/, "") + "/chat/completions", {
       method: "POST", signal: ctrl.signal,
@@ -72,7 +72,7 @@ HARD RULES:
 - No urgency, no hype, no ALL CAPS, no exclamation marks in a row, no links/URLs, no placeholders, no "Re:" or "Fwd:" in the subject.
 - Do NOT write a signature, sign-off name, footer or unsubscribe line: the app adds them.
 - Subject: short (3-7 words), honest, plain; it may contain the business name.
-Return JSON only: {"subject": "...", "body": "..."${lang !== "en" ? ', "subject_en": "English translation of subject", "body_en": "English translation of body"' : ""}}`;
+Return JSON only: {"subject": "...", "body": "..."}`;
   const user = `SENDER: ${s.senderName}, ${s.senderRole} at ${s.business || "freelance"}.
 OFFER NOTES: ${s.offerWhat}
 PROOF POINTS (only use if relevant, never exaggerate): ${s.offerProof || "none"}
@@ -85,7 +85,8 @@ ${known.map((k) => `- ${KNOWN_LABEL[k.key]}: ${k.value}`).join("\n") || "- Nothi
   const subject = String(out.subject || "").trim().replace(/^["']|["']$/g, "");
   const body = String(out.body || "").trim().replace(/\r/g, "");
   const errors = validateDraft(subject, body, lang, lead.businessName || "");
-  return { subject, body, subjectEn: out.subject_en ? String(out.subject_en) : null, bodyEn: out.body_en ? String(out.body_en) : null, errors };
+  // the English version is made separately from the final text (lib/translate.ts), so it always matches what is sent
+  return { subject, body, errors };
 }
 
 export async function translateToEnglish(text: string) {

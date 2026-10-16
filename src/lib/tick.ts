@@ -1,11 +1,10 @@
 import { randomUUID } from "crypto";
 import { db, C, nowIso } from "./fsdb";
-import { getSettings, getState, setState } from "./settings";
+import { getState, setState } from "./settings";
 import { trySendOne, recoverCrashed, closeFinishedCampaigns } from "./sender";
 import { ensureDrafts } from "./drafts";
 import { ensureTranslations } from "./translate";
 import { syncInbox } from "./inbox";
-import { inWindow } from "./schedule";
 import { log } from "./log";
 import { dailyReport } from "./report";
 
@@ -44,13 +43,9 @@ export async function runTick(): Promise<string> {
         await setState({ lastSyncAt: nowIso() }); // try again in 10 min
       });
     }
-    // drafts: in approval mode any time (the queue is capped), otherwise only near a sending window
-    const s = await getSettings();
+    // drafts for every Ready lead of started campaigns, any time: they all wait for my approval before anything is sent
     const running = (await C.campaigns.where("status", "==", "running").get()).docs;
-    const soon = new Date(Date.now() + 30 * 60000);
-    const nearWindow = running.some((c) => inWindow(new Date(), s, c.get("timezone")) || inWindow(soon, s, c.get("timezone")));
-    // approval mode prepares drafts ahead of time so they can be reviewed before the window opens
-    if (!st.globalStop && !st.alert && running.length && (s.approveEach || nearWindow)) {
+    if (!st.globalStop && !st.alert && running.length) {
       await ensureDrafts().catch((e) => log("error", "ai", `ensureDrafts: ${e instanceof Error ? e.message : e}`));
     }
     // English versions of drafts that do not have one yet (only for me to read on the Approve page; nothing is sent)

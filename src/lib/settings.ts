@@ -15,16 +15,16 @@ export type Settings = {
   domain: string; dkimSelector: string;
   dryRun: boolean;
   signatureLogo: boolean; // HTML mail with the logo embedded in the signature
-  approveEach: boolean; // every draft must be approved by me before it can be sent
   fromName: string; // name shown in the lead's inbox; blank = business name, then sender name
   // six fixed mail templates a campaign can use instead of the AI (placeholders: see lib/templates.ts);
-  // tplNFor = whom it is written for: "any" lead, leads with "nosite" (no website of their own) or with a "site"
-  tpl1Name: string; tpl1Subject: string; tpl1Body: string; tpl1For: string;
-  tpl2Name: string; tpl2Subject: string; tpl2Body: string; tpl2For: string;
-  tpl3Name: string; tpl3Subject: string; tpl3Body: string; tpl3For: string;
-  tpl4Name: string; tpl4Subject: string; tpl4Body: string; tpl4For: string;
-  tpl5Name: string; tpl5Subject: string; tpl5Body: string; tpl5For: string;
-  tpl6Name: string; tpl6Subject: string; tpl6Body: string; tpl6For: string;
+  // tplNFor = its group: leads with "nosite" (no website of their own), with a "site", or "any" (fits both);
+  // tplNLang = the language it is written in ("" = read from its text)
+  tpl1Name: string; tpl1Subject: string; tpl1Body: string; tpl1For: string; tpl1Lang: string;
+  tpl2Name: string; tpl2Subject: string; tpl2Body: string; tpl2For: string; tpl2Lang: string;
+  tpl3Name: string; tpl3Subject: string; tpl3Body: string; tpl3For: string; tpl3Lang: string;
+  tpl4Name: string; tpl4Subject: string; tpl4Body: string; tpl4For: string; tpl4Lang: string;
+  tpl5Name: string; tpl5Subject: string; tpl5Body: string; tpl5For: string; tpl5Lang: string;
+  tpl6Name: string; tpl6Subject: string; tpl6Body: string; tpl6For: string; tpl6Lang: string;
 };
 
 export const DEFAULTS: Settings = {
@@ -41,9 +41,9 @@ export const DEFAULTS: Settings = {
   domain: "", dkimSelector: "hostingermail-a",
   dryRun: true,
   signatureLogo: false,
-  approveEach: true,
   fromName: "",
   tpl1Name: "Website intro",
+  tpl1Lang: "",
   tpl1For: "any",
   tpl1Subject: "a website idea for {{business}}",
   tpl1Body: [
@@ -56,6 +56,7 @@ export const DEFAULTS: Settings = {
     "Would it be useful if I sent you two or three ideas for {{business}}, without any obligation?",
   ].join("\n"),
   tpl2Name: "More enquiries",
+  tpl2Lang: "",
   tpl2For: "any",
   tpl2Subject: "more enquiries for {{business}}",
   tpl2Body: [
@@ -69,6 +70,7 @@ export const DEFAULTS: Settings = {
   ].join("\n"),
   // a pair per language: one for leads without a website of their own, one for leads that already have one
   tpl3Name: "No website yet (EN)",
+  tpl3Lang: "",
   tpl3For: "nosite",
   tpl3Subject: "a website for {{business}}",
   tpl3Body: [
@@ -81,6 +83,7 @@ export const DEFAULTS: Settings = {
     "Would it be useful if I prepared a free example of a homepage for {{business}}, without any obligation?",
   ].join("\n"),
   tpl4Name: "Already has a website (EN)",
+  tpl4Lang: "",
   tpl4For: "site",
   tpl4Subject: "an idea for the {{business}} website",
   tpl4Body: [
@@ -93,6 +96,7 @@ export const DEFAULTS: Settings = {
     "Would it be useful if I prepared a free mockup of a refreshed homepage for {{business}}, without any obligation?",
   ].join("\n"),
   tpl5Name: "Pas encore de site (FR)",
+  tpl5Lang: "",
   tpl5For: "nosite",
   tpl5Subject: "un site web pour {{business}}",
   tpl5Body: [
@@ -107,6 +111,7 @@ export const DEFAULTS: Settings = {
     "Je peux vous préparer gratuitement une maquette de page d'accueil, sans engagement. Cela vous intéresse ?",
   ].join("\n"),
   tpl6Name: "Site existant (FR)",
+  tpl6Lang: "",
   tpl6For: "site",
   tpl6Subject: "une idée pour le site de {{business}}",
   tpl6Body: [

@@ -7,6 +7,7 @@ import { useT } from "@/components/lang";
 import { friendlyError, useToast } from "@/components/toast";
 import { Field } from "@/components/ui";
 import { saveDraftEdit } from "../actions";
+import { ruleText } from "../settings/template-check";
 
 const countWords = (text: string) => text.trim().split(/\s+/).filter(Boolean).length;
 
@@ -15,6 +16,7 @@ const OK_CAPS = new Set(["HTTPS", "HTTP", "HTML", "SEO", "URL", "WWW", "SMS", "P
 const FAKE_REPLY = /^\s*(re|fwd?|tr|aw|wg|rv)\s*:/i;
 const DOUBLE_PUNCT = /!!|\?\?/;
 const LINK = /https?:\/\/|www\./i;
+const LEFTOVER = /\{\{|\}\}|\[[A-Z _]{3,}\]/i;
 
 function Check({ ok, children }: { ok: boolean; children: ReactNode }) {
   return (
@@ -30,8 +32,14 @@ function Check({ ok, children }: { ok: boolean; children: ReactNode }) {
 /**
  * Edit a draft by hand. The edit is checked by the same rules as an AI draft and must be approved again.
  * Renders the "Text edit karo" / "Edit text" button and, when open, the form (order-last puts it below the card's buttons).
+ * allowCaps: the lead's own values (business, city…) that placeholders put in: their capitals are not my ALL CAPS,
+ * like on the server (capsAllowed in lib/templates.ts). marks: the spots of a "Text chahiye" draft I must write myself,
+ * e.g. "[OBSERVATION]"; problems: the rules its filled template / own text broke, or the AI's last error (then the
+ * body is empty and I write the whole mail). Saving the edit makes it an ordinary draft that waits for my Approve.
  */
-export function DraftEditor({ id, subject, body, language, businessName = "" }: { id: string; subject: string; body: string; language: string; businessName?: string }) {
+export function DraftEditor({ id, subject, body, language, businessName = "", allowCaps = [], marks = [], problems = [] }: {
+  id: string; subject: string; body: string; language: string; businessName?: string; allowCaps?: string[]; marks?: string[]; problems?: string[];
+}) {
   const toast = useToast();
   const { t } = useT();
   const [open, setOpen] = useState(false);
@@ -63,15 +71,28 @@ export function DraftEditor({ id, subject, body, language, businessName = "" }: 
   const subjLen = subj.trim().length;
   const fakeReply = FAKE_REPLY.test(subj);
   const subjOk = subjLen > 0 && subjLen <= 90 && !fakeReply;
-  const caps = [...new Set(`${subj} ${text}`.match(/\b[A-ZÀ-Ý]{4,}\b/g) || [])].filter((w) => !OK_CAPS.has(w) && !businessName.toUpperCase().includes(w));
+  // capitals inside the lead's own values are theirs; a mark like [OBSERVATION] has its own check below
+  // same rule as lib/validate.ts: only words already in capitals in a lead value (or a [MARK]) are theirs, as whole words
+  const theirs = new Set([...allowCaps, ...marks].flatMap((v) => v.match(/\b[A-ZÀ-Ý]{4,}\b/g) || []));
+  const bn = businessName.toUpperCase();
+  const caps = [...new Set(`${subj} ${text}`.match(/\b[A-ZÀ-Ý]{4,}\b/g) || [])].filter((w) => !OK_CAPS.has(w) && !theirs.has(w) && !bn.includes(w));
   const capsList = caps.slice(0, 3).join(", ");
   const punctOk = !DOUBLE_PUNCT.test(subj) && !DOUBLE_PUNCT.test(text);
   const langName = LANGS[language] || language.toUpperCase();
+  // the marks still in the text (or any other leftover placeholder): the server refuses the edit while one is there
+  const markList = marks.join(", ");
+  const left = marks.filter((k) => subj.includes(k) || text.includes(k));
+  const leftover = left.length > 0 || LEFTOVER.test(subj) || LEFTOVER.test(text);
+  // a "Text chahiye" draft: it waits for my words, so editing it is the next step
+  const needs = marks.length > 0 || problems.length > 0;
+  // the AI failed: no text at all, I write the whole mail
+  const blank = needs && !body.trim();
+  const ruleList = problems.map((e) => ruleText(e, t)).join("; ");
 
   return (
     <>
       <button type="button" onClick={toggle} disabled={pending} aria-expanded={open}
-        className={`btn max-sm:h-auto max-sm:min-h-9 max-sm:whitespace-normal max-sm:py-1.5 max-sm:text-center max-sm:leading-tight ${open ? "border-indigo-200 bg-indigo-50 text-indigo-700" : ""}`}>
+        className={`${needs && !open ? "btn-primary" : "btn"} max-sm:h-auto max-sm:min-h-9 max-sm:whitespace-normal max-sm:py-1.5 max-sm:text-center max-sm:leading-tight ${open ? "border-indigo-200 bg-indigo-50 text-indigo-700" : ""}`}>
         <Icon name={open ? "x" : "pencil"} size={14} />{open ? t("Edit band karo", "Close editor") : t("Text edit karo", "Edit text")}
       </button>
       {open && (
@@ -82,7 +103,24 @@ export function DraftEditor({ id, subject, body, language, businessName = "" }: 
                 <input name="subject" defaultValue={subject} onChange={(e) => setSubj(e.target.value)} className="input" autoComplete="off" />
               </Field>
               <Field label={t("Mail ka text", "Mail text")}
-                hint={t("Sirf mail ka text likho: signature aur footer apne aap judte hain. Koi link nahi.", "Write only the mail text: the signature and footer are added automatically. No links.")}
+                hint={blank
+                  ? <span className="text-amber-700">{t(
+                    `AI ye mail nahi likh paya: subject aur poora text khud likho (${langName} mein). Signature aur footer apne aap judte hain. Koi link nahi.`,
+                    `The AI could not write this mail: write the subject and the whole text yourself (in ${langName}). The signature and footer are added automatically. No links.`,
+                  )}</span>
+                  : needs
+                    ? <span className="text-amber-700">
+                      {marks.length > 0 && t(
+                        `${markList} ki jagah apna ek sach sentence likho: jo aapne unki website pe khud dekha. `,
+                        `Replace ${markList} with one true sentence of your own: something you saw on their website yourself. `,
+                      )}
+                      {problems.length > 0 && t(
+                        `Ye rules theek karo: ${ruleList}. Save pe text dobara check hota hai. `,
+                        `Fix these rules: ${ruleList}. The text is checked again on save. `,
+                      )}
+                      {t("Signature aur footer apne aap judte hain. Koi link nahi.", "The signature and footer are added automatically. No links.")}
+                    </span>
+                    : t("Sirf mail ka text likho: signature aur footer apne aap judte hain. Koi link nahi.", "Write only the mail text: the signature and footer are added automatically. No links.")}
                 info={t(
                   "Ye mail ka main text hai. Signature aur footer (kahan se mile, mail band karne ka tarika, address) app khud jodta hai. Link, ALL CAPS, '!!' ya 'urgent' jaise shabd mana hain.",
                   "This is the main text of the mail. The app adds the signature and footer (where the address was found, how to opt out, postal address) itself. Links, ALL CAPS, '!!' and words like 'urgent' are not allowed.",
@@ -99,6 +137,15 @@ export function DraftEditor({ id, subject, body, language, businessName = "" }: 
                     "A quick check while you type. When you press Save, the server checks all the rules again (such as words like 'guarantee' or 'urgent', and the mail's language). If a rule is broken, the edit is not saved and the message says why.",
                   )} />
               </div>
+              {(marks.length > 0 || leftover) && (
+                <Check ok={!leftover}>
+                  {!leftover
+                    ? t("Koi [PLACEHOLDER] nahi bacha", "No [PLACEHOLDER] left")
+                    : left.length
+                      ? t(`${left.join(", ")} ki jagah apna text likho`, `Replace ${left.join(", ")} with your own text`)
+                      : t("Bacha hua placeholder ({{…}} ya [ … ]) hatao", "Remove the leftover placeholder ({{…}} or [ … ])")}
+                </Check>
+              )}
               <Check ok={wordsOk}>{t(`${words} words · 60–110 chahiye`, `${words} words · needs 60–110`)}</Check>
               <Check ok={hasQuestion}>{hasQuestion ? t("Sawaal (?) hai", "Has a question (?)") : t("Aakhir mein ek sawaal (?) likho", "End with a question (?)")}</Check>
               <Check ok={noLink}>{noLink ? t("Koi link nahi", "No links") : t("Link hatao (mana hai)", "Remove the link (not allowed)")}</Check>
@@ -114,8 +161,12 @@ export function DraftEditor({ id, subject, body, language, businessName = "" }: 
                 <span className="min-w-0">{t(`Bhasha wahi rakho jo mail ki hai (${langName}); doosri bhasha ka text save nahi hoga.`, `Keep the mail's language (${langName}); text in another language will not be saved.`)}</span>
               </div>
               <p className="border-t border-slate-100 pt-2 text-xs leading-relaxed text-slate-500">
-                {t("Save ke baad mail ko dobara approve karna hoga. Approve hamesha saved text ka hota hai.", "After saving, the mail must be approved again. Approval always applies to the saved text.")}
-                {language !== "en" && ` ${t("Right side ka English translation bhi naye text se dobara banega.", "The English translation on the right is made again from the new text.")}`}
+                {needs
+                  ? t("Save ke baad mail ‘Approval baaki’ mein aa jayegi: tab padh ke approve karo. Approve hamesha saved text ka hota hai.", "After saving, the mail moves to ‘Awaiting approval’: read it there, then approve. Approval always applies to the saved text.")
+                  : t("Save ke baad mail ko dobara approve karna hoga. Approve hamesha saved text ka hota hai.", "After saving, the mail must be approved again. Approval always applies to the saved text.")}
+                {language !== "en" && ` ${needs
+                  ? t("Right side ka English translation save ke baad isi text se banega.", "The English translation on the right is made from this text once you save it.")
+                  : t("Right side ka English translation bhi naye text se dobara banega.", "The English translation on the right is made again from the new text.")}`}
               </p>
             </div>
           </div>

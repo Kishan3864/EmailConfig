@@ -5,7 +5,7 @@ import { capFor } from "@/lib/schedule";
 import { signature } from "@/lib/compose";
 import { footer } from "@/lib/lang";
 import { fromHeader } from "@/lib/mailer";
-import { TEMPLATE_IDS, templateOf } from "@/lib/templates";
+import { MAX_PER_GROUP, TEMPLATE_IDS, templateOf } from "@/lib/templates";
 import { fmt } from "@/lib/time";
 import type { T } from "@/lib/i18n";
 import { getT } from "@/lib/i18n-server";
@@ -37,12 +37,21 @@ const PLACEHOLDERS: { k: string; hi: string; en: string }[] = [
   { k: "country", hi: "Desh (CSV)", en: "Country (CSV)" },
   {
     k: "website",
-    hi: `Lead ki apni website ka domain, jaise ${EXAMPLE_SITE} (sirf ‘Website wale’ leads ke liye; baaki ke liye khaali)`,
-    en: `The lead's own website domain, e.g. ${EXAMPLE_SITE} (only for ‘Has a website’ leads; empty for the others)`,
+    hi: `Lead ki apni website ka domain, jaise ${EXAMPLE_SITE} (sirf ‘Website hai’ group ke leads ke liye; baaki ke liye khaali)`,
+    en: `The lead's own website domain, e.g. ${EXAMPLE_SITE} (only for leads in the ‘Has a website’ group; empty for the others)`,
+  },
+  { k: "reviews", hi: `Google reviews ki ginti, jaise ${EXAMPLE_LEAD.reviews} (CSV "reviews")`, en: `Number of Google reviews, e.g. ${EXAMPLE_LEAD.reviews} (CSV "reviews")` },
+  { k: "rating", hi: `Google rating, jaise ${EXAMPLE_LEAD.rating} (CSV "rating")`, en: `Google rating, e.g. ${EXAMPLE_LEAD.rating} (CSV "rating")` },
+  {
+    k: "observation",
+    hi: "Aapki dekhi ek sach problem unki website pe (CSV \"observation\"). Kabhi fallback nahi: na ho to draft ‘Text chahiye’ mein rukta hai",
+    en: "One real problem you saw on their website (CSV \"observation\"). Never a fallback: without it the draft waits as ‘Needs your text’",
   },
   { k: "my_name", hi: "Aapka Naam (Sender profile)", en: "Your Name (Sender profile)" },
   { k: "my_business", hi: "Aapka Business (Sender profile)", en: "Your Business (Sender profile)" },
 ];
+// free or temporary builder pages that count as "no website" (lib/website.ts has the full list)
+const BUILDER_PAGES = "wixsite.com, eatbu.com, metro.rest, framer.website, myshopify.com, mailchimpsites.com, ody.app, webflow.io";
 const TEST_BTN = "btn h-auto min-h-9 w-full justify-start whitespace-normal py-2 text-left leading-tight";
 const SUBHEAD = "mb-3 flex items-center gap-1.5 text-2xs font-bold uppercase tracking-wider text-slate-400";
 const CODE = "rounded bg-slate-100 px-1 font-mono text-2xs text-slate-600";
@@ -464,16 +473,19 @@ export default async function SettingsPage() {
 
             <Section id="templates" className="scroll-mt-20 lg:col-span-2" icon="file" title="Email templates"
               info={t(
-                "Chhe fixed mails, jo campaign AI ki jagah use kar sakta hai. Campaign banate waqt ‘Mail kaise banegi’ mein ya to ek template chuno (sab leads ko wahi jaata hai), ya ‘Website ke hisaab se 2 templates’: jinki website NAHI hai unhe ek template, jinki website HAI unhe dusra. Har lead ke liye sirf placeholders (business ka naam, contact, city…) bharte hain. Template mails bhi same rules aur same approval se guzarti hain. Badalne ke baad ‘Settings save karo’ dabao: nayi drafts naye text se banengi, pehle bani drafts nahi badalti.",
-                "Six fixed mails a campaign can use instead of the AI. When you create a campaign, under ‘How mails are written’ choose either one template (every lead gets it) or ‘Two templates, by website’: one template for leads without a website, another for leads with one. For each lead only the placeholders (business name, contact, city…) are filled in. Template mails go through the same rules and the same approval. After a change, click ‘Save settings’: new drafts use the new text, drafts made earlier do not change.",
+                `Chhe fixed mails, jo campaign AI ki jagah use kar sakta hai. Campaign banate waqt ‘Mail kaise banegi’ mein ya to ek template chuno (sab leads ko wahi jaata hai), ya ‘Website ke hisaab se templates’: leads do groups mein bante hain, ‘Bina website’ aur ‘Website hai’, aur har group ke 1 se ${MAX_PER_GROUP} templates tick karo; us group ke leads ko wo baari baari milte hain. Har lead ke liye sirf placeholders (business ka naam, contact, city, reviews…) bharte hain. CSV mein kisi lead ke apne subject aur body columns hon, to us lead ko template ki jagah wahi text jaata hai. Template mails bhi same rules se guzarti hain (kisi lead ke liye niyam toote to draft wajah ke saath ‘Text chahiye’ mein rukta hai), aur har mail Approve page pe aapke Approve ka wait karti hai. Badalne ke baad ‘Settings save karo’ dabao: nayi drafts naye text se banengi, pehle bani drafts nahi badalti.`,
+                `Six fixed mails a campaign can use instead of the AI. When you create a campaign, under ‘How mails are written’ choose either one template (every lead gets it) or ‘Templates by website’: leads fall into two groups, ‘No website’ and ‘Has a website’, and you tick 1 to ${MAX_PER_GROUP} templates per group; the leads of a group get them in turn. For each lead only the placeholders (business name, contact, city, reviews…) are filled in. If the CSV gives a lead its own subject and body columns, that lead gets that text instead of a template. Template mails go through the same rules (if a rule breaks for a lead, the draft waits as ‘Needs your text’ with the reasons), and every mail waits for your Approve on the Approve page. After a change, click ‘Save settings’: new drafts use the new text, drafts made earlier do not change.`,
               )}
-              sub={t("AI ki jagah fixed text: jinki website NAHI hai unke liye ek mail, jinki website HAI unke liye dusri. Sirf naam aur details badalti hain.", "Fixed text instead of the AI: one mail for leads without a website, another for leads with one. Only names and details change.")}>
+              sub={t(
+                `AI ki jagah fixed text: ‘Bina website’ aur ‘Website hai’ group ke liye alag mails, har group ke ${MAX_PER_GROUP} tak baari baari. Sirf naam aur details badalti hain.`,
+                `Fixed text instead of the AI: separate mails for the ‘No website’ and ‘Has a website’ groups, up to ${MAX_PER_GROUP} per group used in turn. Only names and details change.`,
+              )}>
               <div className="space-y-5">
                 <div className="rounded-lg border border-slate-200 p-3.5">
-                  <h3 className={SUBHEAD}><Icon name="globe" size={12} />{t("Website ke hisaab se 2 templates", "Two templates, by website")}</h3>
+                  <h3 className={SUBHEAD}><Icon name="globe" size={12} />{t("Website ke hisaab se templates", "Templates by website")}</h3>
                   <p className="text-xs leading-relaxed text-slate-600">{t(
-                    "Jinki website NAHI hai unke liye ek template likho, aur jinki website HAI unke liye dusra. Neeche har template ka ‘Kiske liye’ set karo, phir campaign banate waqt ‘Mail kaise banegi’ mein ‘Website ke hisaab se 2 templates’ chuno: app har lead ki CSV wali website dekh ke sahi template khud lagata hai.",
-                    "Write one template for leads without a website and another for leads with one. Set each template's ‘Written for’ below, then, when you create a campaign, choose ‘Two templates, by website’ under ‘How mails are written’: the app looks at each lead's website from the CSV and uses the right template by itself.",
+                    `Leads do groups mein bante hain: ‘Bina website’ aur ‘Website hai’. Neeche har template ka Group set karo (ya ‘Dono groups’). Campaign banate waqt ‘Mail kaise banegi’ mein ‘Website ke hisaab se templates’ chuno aur har group ke 1 se ${MAX_PER_GROUP} templates tick karo: app har lead ki CSV wali website dekh ke uska group pehchanta hai, aur us group ke tick kiye templates baari baari (ek ke baad ek) lagata hai. Form sirf campaign ki bhasha wale templates pehle se tick karta hai: group ke apne, warna ‘Dono groups’ wale; us bhasha mein koi na ho to kuch tick nahi hota aur aap khud chunte ho. Har draft pe likha hota hai ki wo kis template se bana.`,
+                    `Leads fall into two groups: ‘No website’ and ‘Has a website’. Set each template's Group below (or ‘Both groups’). When you create a campaign, choose ‘Templates by website’ under ‘How mails are written’ and tick 1 to ${MAX_PER_GROUP} templates per group: the app looks at each lead's website from the CSV to find its group, and uses that group's ticked templates in turn (one after another). The form pre-ticks only templates in the campaign's language: the group's own, else the ‘Both groups’ ones; if none is in that language, nothing is ticked and you choose. Every draft shows which template it was made from.`,
                   )}</p>
                   <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
                     {(["nosite", "site"] as const).map((f) => (
@@ -488,19 +500,26 @@ export default async function SettingsPage() {
                             <>The CSV has a website of their own, e.g. {EXAMPLE_SITE}. In the template, <code className={CODE}>{"{{website}}"}</code> is filled with that domain.</>,
                           )
                           : t(
-                            "CSV mein koi website nahi, ya sirf Facebook, Instagram, Google Maps, Linktree ya booking site ka link: wo unki apni website nahi ginti.",
-                            "No website in the CSV, or only a Facebook, Instagram, Google Maps, Linktree or booking-site link: that does not count as a website of their own.",
+                            <>CSV mein koi website nahi, ya sirf Facebook, Instagram, Google Maps, directory, booking ya delivery site ka link, ya free / temporary builder page (jaise {BUILDER_PAGES}): wo unki apni website nahi ginti.</>,
+                            <>No website in the CSV, or only a Facebook, Instagram, Google Maps, directory, booking or delivery link, or a free / temporary builder page (like {BUILDER_PAGES}): that does not count as a website of their own.</>,
                           )}</dd>
                       </div>
                     ))}
                   </dl>
+                  <p className="mt-3 flex items-start gap-2 border-t border-slate-100 pt-3 text-xs leading-relaxed text-slate-600">
+                    <Icon name="pencil" size={13} className="mt-px shrink-0 text-slate-400" />
+                    <span className="min-w-0 break-words">{t(
+                      <>Kisi lead ke liye apna likha mail: CSV mein <code className={CODE}>subject</code> aur <code className={CODE}>body</code> columns bharo. Dono hon to us lead ko template (ya AI) ki jagah wahi text jaata hai, same rules ke saath.</>,
+                      <>Your own mail for one lead: fill in the <code className={CODE}>subject</code> and <code className={CODE}>body</code> columns in the CSV. When both are there, that lead gets that text instead of a template (or the AI), with the same rules.</>,
+                    )}</span>
+                  </p>
                 </div>
                 <div className="grid gap-x-8 gap-y-5 rounded-lg border border-slate-200 bg-slate-50/60 p-3.5 md:grid-cols-2">
                   <div className="min-w-0">
                     <h3 className={SUBHEAD}><Icon name="list" size={12} />Placeholders
                       <Info title="Placeholders" size={12} text={t(
-                        "Text ya subject mein ye likho, har lead ke liye app inki jagah lead ki detail bharta hai. CSV wali details import file se aati hain (jis lead ki detail nahi, uske liye khaali). Aapke naam aur business Sender profile se aate hain.",
-                        "Write these in the text or subject; for each lead the app puts the lead's detail in their place. The CSV details come from the import file (empty when a lead does not have them). Your name and business come from Sender profile.",
+                        "Text ya subject mein ye likho, har lead ke liye app inki jagah lead ki detail bharta hai. CSV wali details import file se aati hain (jis lead ki detail nahi, uske liye khaali, ya {{x|text}} wala text). Sirf {{observation}} kabhi khaali ya default text se nahi bharta: na ho to draft ‘Text chahiye’ mein rukta hai aur wo hissa aap Approve page pe khud likhte ho. Aapke naam aur business Sender profile se aate hain.",
+                        "Write these in the text or subject; for each lead the app puts the lead's detail in their place. The CSV details come from the import file (empty when a lead does not have them, or the {{x|text}} text). Only {{observation}} is never left empty or filled with a default: without it the draft waits as ‘Needs your text’ and you write that part yourself on the Approve page. Your name and business come from Sender profile.",
                       )} />
                     </h3>
                     <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-3 gap-y-1.5 text-xs">
@@ -517,6 +536,10 @@ export default async function SettingsPage() {
                         <>: lead ki detail khaali ho to ‘text’ aata hai. Jaise <code className={CODE}>{"Hello {{contact|there}},"}</code> → contact ho to <b className="font-medium text-slate-800">Hello {EXAMPLE_LEAD.contactName},</b> warna <b className="font-medium text-slate-800">Hello there,</b></>,
                         <>: when the lead has no value, ‘text’ is used. E.g. <code className={CODE}>{"Hello {{contact|there}},"}</code> → <b className="font-medium text-slate-800">Hello {EXAMPLE_LEAD.contactName},</b> with a contact, otherwise <b className="font-medium text-slate-800">Hello there,</b></>,
                       )}
+                      {t(
+                        <> <code className={CODE}>{"{{observation}}"}</code> pe ye kabhi nahi lagta: observation na ho to draft mein <b className="font-medium text-slate-800">[OBSERVATION]</b> aata hai aur wo ‘Text chahiye’ mein rukta hai.</>,
+                        <> This never applies to <code className={CODE}>{"{{observation}}"}</code>: without an observation the draft shows <b className="font-medium text-slate-800">[OBSERVATION]</b> and waits as ‘Needs your text’.</>,
+                      )}
                     </p>
                   </div>
                   <div className="min-w-0">
@@ -528,13 +551,19 @@ export default async function SettingsPage() {
                         "Text mein koi link nahi (http:// ya www. wala): link sirf signature mein aata hai. {{website}} sirf domain likhta hai, wo chalta hai",
                         "No links in the text (with http:// or www.): links only go in the signature. {{website}} writes just the domain, which is fine",
                       )}</li>
-                      <li>{t("CAPS wale shabd, ‘urgent’, ‘guarantee’, ‘100%’, ‘!!’ aur HTML nahi", "No ALL CAPS words, ‘urgent’, ‘guarantee’, ‘100%’, ‘!!’ or HTML")}</li>
+                      <li>{t(
+                        "Apne text mein CAPS wale shabd, ‘urgent’, ‘guarantee’, ‘100%’, ‘!!’ aur HTML nahi. Placeholders se aaye capitals chalte hain (jaise business ka naam ‘CAFÉ DE CHIRAZ’), aapke apne nahi",
+                        "No ALL CAPS words, ‘urgent’, ‘guarantee’, ‘100%’, ‘!!’ or HTML in your own text. Capitals that come from placeholders are fine (e.g. the business name ‘CAFÉ DE CHIRAZ’), your own are not",
+                      )}</li>
                       <li>{t("Subject 90 akshar tak, ‘Re:’ ya ‘Fwd:’ ke bina", "Subject up to 90 characters, without ‘Re:’ or ‘Fwd:’")}</li>
-                      <li>{t("Campaign ki bhasha mein likho: French campaign ke liye French text, warna draft fail hota hai", "Write it in the campaign's language: French text for a French campaign, otherwise the draft fails")}</li>
+                      <li>{t(
+                        "Campaign ki bhasha mein likho, aur template ki ‘Bhasha’ wahi rakho: French campaign ke liye French text, warna draft ‘Text chahiye’ mein rukta hai",
+                        "Write it in the campaign's language, and keep the template's ‘Language’ the same: French text for a French campaign, otherwise the draft waits as ‘Needs your text’",
+                      )}</li>
                       <li>{t("Signature aur footer mat likho: app unhe Sender profile se khud lagata hai", "Do not write a signature or footer: the app adds them from Sender profile")}</li>
                       <li>{t(
-                        "Sirf wahi likho jo us template ke group ke har lead ke liye sach ho. ‘Website wale’ template mein likh sakte ho ki unki website hai, par use judge mat karo (slow, purani, mobile pe kharab…) jab tak ye har lead ke liye sach na ho. ‘Maine aapki website dekhi’ jaisi lines nahi: template wali mail ke liye app lead ki website kabhi nahi kholta",
-                        "Write only what is true for every lead in the template's group. In a ‘Has a website’ template you may say they have a website, but do not judge it (slow, old, not made for phones…) unless that is true for every lead. No lines like ‘I looked at your website’: for a template mail the app never opens the lead's website",
+                        "Sirf wahi likho jo us template ke group ke har lead ke liye sach ho. ‘Website hai’ template mein likh sakte ho ki unki website hai, par use judge mat karo (slow, purani, mobile pe kharab…) jab tak ye har lead ke liye sach na ho. Template wali mail ke liye app lead ki website kabhi nahi kholta: kisi lead ki website ki asli problem ke liye {{observation}} use karo (CSV mein aapki apni dekhi baat)",
+                        "Write only what is true for every lead in the template's group. In a ‘Has a website’ template you may say they have a website, but do not judge it (slow, old, not made for phones…) unless that is true for every lead. For a template mail the app never opens the lead's website: for a real problem on one lead's website, use {{observation}} (what you saw yourself, from the CSV)",
                       )}</li>
                       <li>{t(
                         "French mein ? aur : se pehle ka space waisa hi rehta hai jaisa aap likhte ho (‘Cela vous intéresse ?’)",
@@ -634,15 +663,15 @@ export default async function SettingsPage() {
                 </Group>
               </div>
 
-              {/* Mode (DRY-RUN / LIVE) and its Dashboard link live in the Connection test card: a link here, next to unsaved fields, invites leaving without saving */}
-              <div className="mt-6 grid gap-3 border-t border-slate-100 pt-5 md:grid-cols-2">
-                <Toggle name="approveEach" checked={s.approveEach} title={t("Har mail approve karke hi bhejo", "Approve every mail before sending")}
-                  text={t("On = har mail 'Approve Karo' page pe rukti hai", "On = every mail waits on the 'Approve\u00a0mails' page")}
-                  info={t(
-                    "On (recommended): AI ki har mail 'Approve Karo' page pe rukti hai aur aapke approve karne ke baad hi jaati hai. Off: drafts apne aap approve ho jaate hain.",
-                    "On (recommended): every AI mail waits on the 'Approve mails' page and goes out only after you approve it. Off: drafts are approved automatically.",
-                  )} />
-              </div>
+              {/* Mode (DRY-RUN / LIVE) and its Dashboard link live in the Connection test card: a link here, next to unsaved fields, invites leaving without saving.
+                  Nothing approves a mail except the owner's own click on the Approve page (lib/approval.ts). */}
+              <p className="mt-6 flex items-start gap-2 rounded-lg bg-slate-50 px-3 py-2.5 text-xs text-slate-500">
+                <Icon name="check-check" size={13} className="mt-px shrink-0 text-slate-400" />
+                <span className="min-w-0 break-words">{t(
+                  <>Har mail <b className="font-medium text-slate-700">Approve Karo</b> page pe aapke Approve ka wait karti hai. Approve hui mails upar ki limits ke andar apne aap jaati hain.</>,
+                  <>Every mail waits for your Approve on the <b className="font-medium text-slate-700">Approve mails</b> page. Approved mails go out automatically within the limits above.</>,
+                )}</span>
+              </p>
             </Section>
 
             <Section id="ai" className="scroll-mt-20" icon="bot" title="AI (OpenAI-compatible)"

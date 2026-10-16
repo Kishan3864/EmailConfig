@@ -63,6 +63,11 @@ const DONE = { enNeeded: false, enRetryAt: null, enTries: 0 };
 async function translateSnap(d: DocumentSnapshot, force: boolean): Promise<{ ok: boolean; error?: string }> {
   const ref = d.ref;
   const m = d.data() as Message;
+  // a draft still waiting for my text is translated once I have written and saved it (saveDraftEdit queues it)
+  if (m.status === "needs_text") {
+    if (m.enNeeded || m.enRetryAt) await ref.update(DONE);
+    return { ok: false, error: "the draft still needs your text" };
+  }
   if (m.language === "en" || (!force && englishOf(m).kind === "ready")) {
     if (m.enNeeded || m.enRetryAt) await ref.update(DONE);
     return { ok: true };

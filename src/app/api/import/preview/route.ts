@@ -8,6 +8,8 @@ export const maxDuration = 300;
 
 /** optional facts for the AI: trimmed, one line, length-capped */
 const clean = (v?: string, max = 120) => (v || "").replace(/\s+/g, " ").trim().slice(0, max) || null;
+/** a mail body from the file: its line breaks are kept */
+const text = (v?: string, max = 4000) => (v || "").replace(/\r/g, "").trim().slice(0, max) || null;
 
 export async function POST(req: Request) {
   const { t } = await getT();
@@ -25,6 +27,8 @@ export async function POST(req: Request) {
         rowNo: r.rowNo, email: r.email || null, businessName: r.businessName || null, website: r.website || null, phone: r.phone || null,
         country: r.country || null, outcome: r.outcome, reason: r.reason || null, businessKey: r.businessKey || null,
         contactName: clean(r.contactName), city: clean(r.city), category: clean(r.category), about: clean(r.about, 600), note: clean(r.note, 400),
+        reviews: clean(r.reviews, 20), rating: clean(r.rating, 10), observation: clean(r.observation, 400),
+        customSubject: clean(r.subject, 150), customBody: text(r.body),
       });
     }
     await b.commit();

@@ -3,6 +3,7 @@ import type { ComponentProps, ReactNode } from "react";
 import { C, count, rows, type Campaign } from "@/lib/fsdb";
 import { getSettings, getState } from "@/lib/settings";
 import { capFor, priorSendingDays, sentToday, estimateFinish, nextWindowOpen } from "@/lib/schedule";
+import { queuedCount } from "@/lib/campaign";
 import { fmt, fmtDate, dayStart, partsIn, DISPLAY_TZ } from "@/lib/time";
 import type { T } from "@/lib/i18n";
 import { getT } from "@/lib/i18n-server";
@@ -60,14 +61,28 @@ export default async function Dashboard() {
     C.campaigns.where("status", "in", ["running", "paused", "draft"]).get().then((q) => rows<Campaign>(q).sort((a, b) => a.createdAt.localeCompare(b.createdAt))),
   ]);
   const tz = active.find((c) => c.status === "running")?.timezone || active[0]?.timezone || "Europe/Paris";
-  const runningIds = active.filter((c) => c.status === "running").map((c) => c.id);
+  // the worker drafts and sends only for campaigns that are running AND started (samplesApproved = started)
+  const isLive = (c: Campaign) => c.status === "running" && c.samplesApproved;
+  const liveIds = active.filter(isLive).map((c) => c.id);
   const byStatus = (status: string) => count(C.leads.where("status", "==", status));
   const ofCampaign = (id: string) => C.leads.where("campaignId", "==", id);
   const istToday = dayStart(new Date(), DISPLAY_TZ).toISOString();
 
-  // all reads run in parallel; only the finish estimates further down depend on each other
-  const [[prior, today, queue], [sent, replied, bounced, optedOut, review, manual, ledger], [liveToday, dryToday, waiting, approvedReady], [confirmedLists, approvedCampaigns, okSends], last50, sizes] = await Promise.all([
-    Promise.all([priorSendingDays(tz), sentToday(tz), runningIds.length ? count(C.leads.where("campaignId", "in", runningIds.slice(0, 30)).where("status", "==", "ready")) : 0]),
+  const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+
+  // all reads run in parallel (counts only, a few per running campaign); only the finish estimates further down depend on each other
+  // the way of a mail: draft still to make (worker) → Text chahiye → Approval baaki → send queue (approved) → sent
+  const [[prior, today, leadsLeft, toCreate, queued, dryDone], [sent, replied, bounced, optedOut, review, manual, ledger], [liveToday, dryToday, waiting, needsText], [confirmedLists, startedCampaigns, okSends], last50, sizes] = await Promise.all([
+    Promise.all([
+      priorSendingDays(tz), sentToday(tz),
+      liveIds.length ? count(C.leads.where("campaignId", "in", liveIds.slice(0, 30)).where("status", "==", "ready")) : 0,
+      // Ready leads of running, started campaigns the worker has not made a draft for yet
+      Promise.all(liveIds.map((id) => count(ofCampaign(id).where("status", "==", "ready").where("hasMessage", "==", false)))).then(sum),
+      // approved mails of running, started campaigns still to go out: only these are ever sent (DRY-RUN: not yet sent to the test address)
+      Promise.all(liveIds.map((id) => queuedCount(id, s.dryRun))).then(sum),
+      // DRY-RUN: approved mails already sent to the test address; they go to the leads only after LIVE
+      s.dryRun ? Promise.all(liveIds.map((id) => count(C.messages.where("campaignId", "==", id).where("status", "==", "ready").where("dryRunDone", "==", true).where("approved", "==", true)))).then(sum) : 0,
+    ]),
     Promise.all([
       count(C.messages.where("status", "in", ["sent", "bounced"])), byStatus("replied"), byStatus("bounced"), byStatus("opted_out"), byStatus("needs_review"), byStatus("check_manual"), count(C.contacted),
     ]),
@@ -75,13 +90,35 @@ export default async function Dashboard() {
       count(C.sendLogs.where("ok", "==", true).where("at", ">=", istToday).where("dryRun", "==", false)),
       count(C.sendLogs.where("ok", "==", true).where("at", ">=", istToday).where("dryRun", "==", true)),
       count(C.messages.where("approved", "==", false).where("status", "==", "ready")),
-      count(C.messages.where("approved", "==", true).where("status", "==", "ready")),
+      count(C.messages.where("status", "==", "needs_text")),
     ]),
-    // setup guide
+    // setup guide (samplesApproved = the campaign was started)
     Promise.all([count(C.lists.where("confirmed", "==", true)), count(C.campaigns.where("samplesApproved", "==", true)), count(C.sendLogs.where("ok", "==", true))]),
     C.messages.orderBy("sentAt", "desc").limit(50).get().then((q) => q.docs.map((d) => d.get("status") as string)),
-    Promise.all(active.map((c) => Promise.all([count(ofCampaign(c.id)), count(ofCampaign(c.id).where("status", "==", "ready")), count(ofCampaign(c.id).where("status", "==", "needs_review"))]))),
+    // per active campaign: leads, Ready leads, leads to review, drafts awaiting my approval, drafts waiting for my text
+    Promise.all(active.map((c) => Promise.all([
+      count(ofCampaign(c.id)), count(ofCampaign(c.id).where("status", "==", "ready")), count(ofCampaign(c.id).where("status", "==", "needs_review")),
+      count(C.messages.where("campaignId", "==", c.id).where("status", "==", "ready").where("approved", "==", false)),
+      count(C.messages.where("campaignId", "==", c.id).where("status", "==", "needs_text")),
+    ]))),
   ]);
+  // drafts waiting for me, split by whether approving them sends anything: only running, started campaigns send.
+  // idle = the waiting drafts of a campaign in draft (not started) or paused: approving them sends nothing yet
+  let waitLive = 0, textLive = 0;
+  const idle: { c: Campaign; n: number }[] = [];
+  active.forEach((c, i) => {
+    const [, , , w, x] = sizes[i];
+    if (isLive(c)) { waitLive += w; textLive += x; }
+    else if (w + x) idle.push({ c, n: w + x });
+  });
+  const idleN = sum(idle.map((x) => x.n));
+  /** The Approve page (k 3 = "Approval baaki", 4 = "Text chahiye" tab), filtered to one campaign when all `total` drafts are its own. */
+  const reviewHref = (k: 3 | 4, total: number, liveOnly = false) => {
+    const i = active.findIndex((c, j) => sizes[j][k] > 0 && (!liveOnly || isLive(c)));
+    const c = i >= 0 && sizes[i][k] === total ? `c=${active[i].id}` : "";
+    return k === 4 ? `/review?s=text${c && `&${c}`}` : `/review${c && `?${c}`}`;
+  };
+  const silent = s.dryRun && !s.testEmail; // DRY-RUN without a test address: no mail goes out at all
   const cap = capFor(s, prior);
   const bounceRate = last50.length ? last50.filter((x) => x === "bounced").length / last50.length : 0;
   const bouncePct = (bounceRate * 100).toFixed(1);
@@ -121,27 +158,39 @@ export default async function Dashboard() {
   ].filter((x): x is string => !!x);
   // a to-do, not a problem: it does not change the health colour
   if (review) issues.push({ tone: "info", title: t(`${review} leads review ke liye ruke hain`, `${review} ${review === 1 ? "lead is" : "leads are"} waiting for review`), text: t("Approve ya reject karo, tabhi inhe mail jayegi.", "Approve or reject them; until then they get no mail."), href: "/contacts?status=needs_review", cta: t("Review karo", "Review leads") });
+  if (needsText) issues.push({
+    tone: "info", href: reviewHref(4, needsText), cta: t("Text likho", "Write the text"),
+    title: t(`${needsText} mails mein aapka text chahiye`, `${needsText} ${needsText === 1 ? "mail needs" : "mails need"} your text`),
+    text: t(
+      "Kisi mein [OBSERVATION] jaisi jagah khaali hai, kisi ka text draft ka rule todta hai. Approve page ke 'Text chahiye' tab mein 'Text edit karo' se theek karo, tabhi approve hogi.",
+      "Some miss a part like [OBSERVATION], some break a draft rule. Fix them with 'Edit text' in the 'Needs your text' tab of the Approve page; only then can they be approved.",
+    ),
+  });
   issues.sort((a, b) => ISSUE_LOOK[a.tone].rank - ISSUE_LOOK[b.tone].rank);
   // up to 2 rows fit beside today's tiles (big screens); more get the full width in two columns
   const wide = issues.length > 2;
 
+  // only approved mails are ever sent: the next one leaves from the send queue, in the sending window
+  // (DRY-RUN: queued holds only the mails not yet sent to the test address, so nothing left there = no time to promise)
   let next: Date | null = null;
-  if (!stopped && queue > 0) {
+  if (!stopped && !silent && queued > 0) {
     const gap = st.nextSendAt ? new Date(st.nextSendAt) : new Date();
     next = nextWindowOpen(gap > new Date() ? gap : new Date(), s, tz);
   }
-  // the worker only sends approved mails: with none approved and some waiting, nothing leaves until I approve
-  const needApproval = !!next && approvedReady === 0 && waiting > 0;
+  // nothing approved and drafts of running, started campaigns waiting for me: nothing leaves until I approve (the last step).
+  // Drafts of a campaign in draft or paused do not count: approving those sends nothing until it is started / resumed
+  const needApproval = !stopped && !silent && queued === 0 && waitLive + textLive > 0;
+  const idleOnly = waitLive + textLive === 0 && idleN > 0;
   const top = capFor(s, 1000); // the most the daily limit ever grows to (the same number Settings shows)
   const planCaps = s.planDailyLimit > 0 && top === Math.floor(s.planDailyLimit * 0.4); // the plan's 40%, not the warm-up, sets that maximum
 
-  // finish estimates: mails of running campaigns created earlier go out first ("ahead")
+  // finish estimates (if I keep approving): mails of running, started campaigns created earlier go out first ("ahead")
   let ahead = 0;
   const progress = await Promise.all(active.map((c, i) => {
-    const [total, remaining, rev] = sizes[i];
+    const [total, remaining, rev, toApprove, toText] = sizes[i];
     const before = ahead;
-    if (c.status === "running") ahead += remaining;
-    return estimateFinish(s, c.timezone, remaining, before).then((finish) => ({ c, total, done: total - remaining - rev, remaining, finish }));
+    if (isLive(c)) ahead += remaining;
+    return estimateFinish(s, c.timezone, remaining, before).then((finish) => ({ c, total, done: total - remaining - rev, remaining, toApprove, toText, finish }));
   }));
 
   const emptyFields = [!s.fromEmail && "From address", !s.testEmail && "Test address", !s.senderName && t("Naam", "Name"), !s.postalAddress && "Postal address"].filter(Boolean).join(", ");
@@ -184,27 +233,21 @@ export default async function Dashboard() {
       ),
     },
     {
-      title: t("Campaign banao, 5 samples padho aur start karo", "Create a campaign, read 5 samples and start"), done: approvedCampaigns > 0, href: "/campaigns", cta: t("Campaign banao", "Create campaign"),
-      how: t("List chuno, 5 sample mails padho, theek lagein to campaign start karo.", "Pick a list, read 5 sample mails and start the campaign if they look right."),
+      title: t("Campaign banao aur start karo", "Create a campaign and start it"), done: startedCampaigns > 0, href: "/campaigns", cta: t("Campaign banao", "Create campaign"),
+      how: t("List aur mail ka tarika chuno, chaho to 5 samples dekho, phir start karo. Start se koi mail approve nahi hoti.", "Pick a list and how mails are written, look at 5 samples if you like, then start. Starting approves no mail."),
       info: t(
-        "Campaigns page pe import ki hui list chuno. App pehle 5 sample mails likhta hai. Unhe dhyan se padho; theek lagein to approve karke campaign start karo.",
-        "Pick an imported list on the Campaigns page. The app first writes 5 sample mails. Read them carefully; if they look right, approve them and start the campaign.",
+        "Campaigns page pe import ki hui list chuno aur mail ka tarika: AI, ek Template, ya Website ke hisaab se templates. 5 sample drafts sirf ek preview hain (optional). Start karte hi worker campaign ke har Ready lead ka draft banata hai (template se har minute 50 tak, AI se 3) aur sab Approve page pe aate hain: 'Approval baaki' mein, ya 'Text chahiye' mein jab pehle aapka text chahiye. Start khud kuch approve nahi karta, samples bhi nahi.",
+        "Pick an imported list on the Campaigns page and how mails are written: AI, one Template, or Templates by website. The 5 sample drafts are only a preview (optional). Once you start, the worker makes a draft for every Ready lead of the campaign (up to 50 a minute from a template, 3 with the AI) and they all show up on the Approve page: as 'Awaiting approval', or as 'Needs your text' when your text is needed first. Starting approves nothing itself, not even the samples.",
       ),
     },
     {
       title: t("Mails approve karo, pehli mail jaane do", "Approve mails and let the first one go"), done: okSends > 0, href: "/review", cta: t("Approve karo", "Approve mails"),
-      how: s.approveEach
-        ? t("Approve page pe har draft padho aur approve karo. Worker sending window mein bhej dega.", "Read and approve each draft on the Approve page. The worker sends it in the sending window.")
-        : t("Auto-approve on hai: drafts apne aap approve hote hain. Worker sending window mein pehli mail bhej dega.", "Auto-approve is on: drafts are approved automatically. The worker sends the first mail in the sending window."),
-      info: s.approveEach
-        ? t(
-          "AI ka likha har draft Approve page pe rukta hai. Padho, zarurat ho to edit karo, phir approve karo. Pehli mail (dry-run ki test mail bhi) successfully jaate hi ye step poora ho jata hai.",
-          "Every draft the AI writes waits on the Approve page. Read it, edit it if needed, then approve it. This step is done as soon as the first mail (a dry-run test mail counts too) goes out successfully.",
-        )
-        : t(
-          "Auto-approve on hai, isliye AI ke drafts apne aap approve hokar sending window mein bhej diye jaate hain. Approve page pe sirf wo drafts dikhte hain jo abhi bhi ruke hain. Pehli mail (dry-run ki test mail bhi) successfully jaate hi ye step poora ho jata hai.",
-          "Auto-approve is on, so the AI's drafts are approved automatically and sent in the sending window. The Approve page only shows drafts that are still waiting. This step is done as soon as the first mail (a dry-run test mail counts too) goes out successfully.",
-        ),
+      how: t("Approve page pe drafts padho aur approve karo: ye aakhri step hai. Approve ki hui mail worker apne aap bhejta hai.", "Read the drafts on the Approve page and approve them: this is the last step. The worker sends approved mails by itself."),
+      now: idleOnly ? t("Drafts ka campaign abhi nahi chal raha: pehle start / resume karo", "The drafts' campaign is not running: start or resume it first") : undefined,
+      info: t(
+        "Har draft (samples bhi) Approve page pe aapke Approve ka wait karta hai. Padho, zarurat ho to edit karo, phir ek mail, chuni hui mails ya saari ek saath approve karo. Approve ki hui mail sending window, random gap, daily limit aur plan ke 40% ke andar apne aap jaati hai, par sirf tab jab uska campaign start ho chuka ho aur chal raha ho. Pehli mail (dry-run ki test mail bhi) successfully jaate hi ye step poora ho jata hai.",
+        "Every draft (the samples too) waits on the Approve page for your Approve. Read it, edit it if needed, then approve one mail, the ones you select, or all at once. An approved mail goes out by itself within the sending window, a random gap, the daily limit and 40% of the plan, but only while its campaign is started and running. This step is done as soon as the first mail (a dry-run test mail counts too) goes out successfully.",
+      ),
     },
     {
       title: t("Sab theek lage to LIVE mode on karo", "Turn on LIVE mode when all looks good"), done: !s.dryRun, href: "/#mode", cta: t("Mode pe jao", "Go to mode"),
@@ -229,14 +272,40 @@ export default async function Dashboard() {
       tone: "amber", href: "/logs", cta: t("Logs dekho", "See logs"),
       text: t(<>{strong("Sending ruki hui hai.")} Pehle problem theek karo, phir upar se stop hatao.</>, <>{strong("Sending is stopped.")} Fix the problem first, then clear the stop above.</>),
     };
-    if (openStep && okSends === 0) return openStep;
-    if (waiting > 0) return {
-      href: "/review", cta: t("Approve karo", "Approve mails"),
+    // the open step is "Mails approve karo" (index 5) but every waiting draft is in a campaign that does not send: say that instead
+    if (openStep && okSends === 0 && !(todo === 5 && idleOnly)) return openStep;
+    // only drafts of running, started campaigns: approving them really is the last step
+    if (waitLive > 0) return {
+      href: reviewHref(3, waitLive, true), cta: t("Approve karo", "Approve mails"),
       text: t(
-        <>{strong(`${waiting} mails aapke approval ka wait kar rahi hain.`)} Padho aur approve karo, tabhi wo jayengi.</>,
-        <>{strong(`${waiting} ${waiting === 1 ? "mail is" : "mails are"} waiting for your approval.`)} {waiting === 1 ? "Read and approve it; only then does it go out." : "Read and approve them; only then do they go out."}</>,
+        <>{strong(`${waitLive} mails aapke approval ka wait kar rahi hain.`)} Padho aur approve karo: ye aakhri step hai, uske baad mail limits ke andar apne aap jaati hai{s.dryRun && " (DRY-RUN mein sirf aapke test address pe)"}.{textLive > 0 && ` ${textLive} mails mein pehle aapka text chahiye.`}{idleN > 0 && ` ${idleN} aur drafts aise campaigns ke hain jo abhi nahi chal rahe: unhe approve karne se abhi kuch nahi jaata.`}</>,
+        <>{strong(`${waitLive} ${waitLive === 1 ? "mail is" : "mails are"} waiting for your approval.`)} {waitLive === 1 ? "Read and approve it" : "Read and approve them"}: this is the last step, after which mails go out by themselves within the limits{s.dryRun && " (in DRY-RUN only to your test address)"}.{textLive > 0 && ` ${textLive} ${textLive === 1 ? "mail needs" : "mails need"} your text first.`}{idleN > 0 && ` ${idleN} more ${idleN === 1 ? "draft belongs" : "drafts belong"} to campaigns that are not running: approving ${idleN === 1 ? "it" : "them"} sends nothing yet.`}</>,
       ),
     };
+    if (textLive > 0) return {
+      href: reviewHref(4, textLive, true), cta: t("Text likho", "Write the text"),
+      text: t(
+        <>{strong(`${textLive} mails mein aapka text chahiye.`)} Approve page ke ‘Text chahiye’ tab mein ‘Text edit karo’ dabao: [OBSERVATION] jaisi khaali jagah likho ya toota hua rule theek karo, save karo, phir approve karo.</>,
+        <>{strong(`${textLive} ${textLive === 1 ? "mail needs" : "mails need"} your text.`)} In the ‘Needs your text’ tab of the Approve page, press ‘Edit text’: write the missing part (like [OBSERVATION]) or fix the broken rule, save, then approve.</>,
+      ),
+    };
+    // drafts wait only in campaigns that are in draft (not started) or paused: approving them sends nothing yet
+    if (idleN > 0) {
+      const one = idle.length === 1 ? idle[0].c : null;
+      const paused = one?.status === "paused";
+      return {
+        tone: "amber", href: one ? `/campaigns/${one.id}` : "/campaigns", cta: one ? t("Campaign kholo", "Open campaign") : t("Campaigns kholo", "Open campaigns"),
+        text: one
+          ? t(
+            <>{strong(`${idleN} drafts approval ka wait kar rahe hain, par campaign "${one.name}" ${paused ? "ruka hua hai" : "abhi start nahi hua"}.`)} Inhe approve karne se koi mail nahi jaayegi jab tak aap campaign {paused ? "resume" : "start"} nahi karte. Start ya resume khud kuch approve nahi karta.</>,
+            <>{strong(`${idleN} ${idleN === 1 ? "draft is" : "drafts are"} waiting for approval, but the campaign "${one.name}" ${paused ? "is paused" : "has not been started"}.`)} Approving {idleN === 1 ? "it" : "them"} sends nothing until you {paused ? "resume" : "start"} the campaign. Starting or resuming approves nothing itself.</>,
+          )
+          : t(
+            <>{strong(`${idleN} drafts approval ka wait kar rahe hain, par unke ${idle.length} campaigns abhi nahi chal rahe (draft ya ruke hue).`)} Inhe approve karne se koi mail nahi jaayegi jab tak campaign start ya resume nahi hota. Start ya resume khud kuch approve nahi karta.</>,
+            <>{strong(`${idleN} drafts are waiting for approval, but their ${idle.length} campaigns are not running (draft or paused).`)} Approving them sends nothing until a campaign is started or resumed. Starting or resuming approves nothing itself.</>,
+          ),
+      };
+    }
     if (manual > 0) return {
       tone: "amber", href: "/contacts?status=check_manual", cta: t("Check karo", "Check them"),
       text: t(
@@ -252,17 +321,27 @@ export default async function Dashboard() {
       ),
     };
     if (openStep) return openStep;
-    if (!runningIds.length) return {
+    if (!liveIds.length) return {
       href: "/campaigns", cta: t("Campaigns kholo", "Open campaigns"),
-      text: t(<>{strong("Abhi koi campaign nahi chal raha.")} Naya campaign banao ya ruka hua campaign resume karo.</>, <>{strong("No campaign is running right now.")} Create a new campaign or resume a paused one.</>),
+      text: t(<>{strong("Abhi koi campaign nahi chal raha.")} Campaign banao aur start karo, ya ruka hua campaign resume karo.</>, <>{strong("No campaign is running right now.")} Create a campaign and start it, or resume a paused one.</>),
     };
-    if (queue === 0) return {
+    if (leadsLeft === 0) return {
       href: "/import", cta: t("Nayi list import karo", "Import a new list"),
       text: t(<>{strong("Chal rahe campaigns mein koi lead baaki nahi.")} Aur mails bhejne ke liye nayi list import karo.</>, <>{strong("No leads left in the running campaigns.")} Import a new list to send more mails.</>),
     };
+    if (queued === 0 && toCreate > 0) return {
+      href: "/campaigns", cta: t("Campaigns dekho", "See campaigns"),
+      text: t(
+        <>{strong(`Worker drafts bana raha hai: ${toCreate} leads ke abhi baaki.`)} Bante hi wo Approve page pe ‘Approval baaki’ mein aayenge.</>,
+        <>{strong(`The worker is making drafts: ${toCreate} ${toCreate === 1 ? "lead" : "leads"} still to go.`)} As they are made, they show up on the Approve page as ‘Awaiting approval’.</>,
+      ),
+    };
     return {
       tone: "emerald", href: "/sent", cta: t("Aaj ki mails dekho", "See today's mails"),
-      text: t(<>{strong("Sab chal raha hai.")} Worker sending window mein mails bhej raha hai.</>, <>{strong("Everything is running.")} The worker is sending mails in the sending window.</>),
+      text: t(
+        <>{strong("Sab chal raha hai.")} Worker aapki approve ki hui mails sending window mein apne aap bhej raha hai.</>,
+        <>{strong("Everything is running.")} The worker is sending the mails you approved by itself, in the sending window.</>,
+      ),
     };
   })();
 
@@ -362,10 +441,11 @@ export default async function Dashboard() {
                 <Link href="/settings#mailbox" className="btn btn-sm mt-2.5">{t("Test address daalo", "Add test address")}<Icon name="chevron-right" size={13} /></Link>
               )}
               <p className="mt-1.5 flex items-start gap-1.5 text-xs text-slate-500">
-                <Icon name={s.approveEach ? "check-check" : "bot"} size={13} className="mt-px" />
-                {s.approveEach
-                  ? t("Har mail pehle aapke approval ke liye rukti hai.", "Every mail waits for your approval first.")
-                  : t("Auto-approve on hai: naye drafts apne aap approve ho jaate hain.", "Auto-approve is on: new drafts are approved automatically.")}
+                <Icon name="check-check" size={13} className="mt-px shrink-0" />
+                <span className="min-w-0">{t(
+                  "Har mail aapke Approve ka wait karti hai (aakhri step). Approve hote hi wo limits ke andar apne aap jaati hai.",
+                  "Every mail waits for your Approve (the last step). Once approved, it goes out by itself within the limits.",
+                )}</span>
               </p>
             </div>
           </div>
@@ -390,19 +470,14 @@ export default async function Dashboard() {
                 "Aaj kitni mails asli leads ko successfully gayi. Dry-run ki test mails isme nahi gini jaati, wo neeche chhoti line mein hain. Click karke Sent page pe har mail ka text dekho.",
                 "How many mails went out to real leads today. Dry-run test mails are not counted here; they are in the small line below. Click to see the text of every mail on the Sent page.",
               )} />
-            <Stat label={t("Approval baaki", "To approve")} value={waiting} href="/review" icon="check-check" tone={waiting ? "amber" : "slate"}
-              sub={waiting
-                ? t("Approve karo, tabhi jayengi", "Sent only after you approve")
-                : s.approveEach ? t("Abhi koi mail nahi ruki", "No mail waiting right now") : t("Auto-approve on hai", "Auto-approve is on")}
-              info={s.approveEach
-                ? t(
-                  "AI ki likhi mails jo aapke approval ka wait kar rahi hain. Aapke approve kiye bina koi mail nahi jaati. Click karke Approve page kholo.",
-                  "Mails written by the AI that are waiting for your approval. No mail goes out until you approve it. Click to open the Approve page.",
-                )
-                : t(
-                  "Auto-approve on hai: naye drafts apne aap approve hokar bhej diye jaate hain. Yahan sirf wo mails gini jaati hain jo abhi bhi aapke approval ka wait kar rahi hain. Click karke Approve page kholo.",
-                  "Auto-approve is on: new drafts are approved and sent automatically. This only counts mails that are still waiting for your approval. Click to open the Approve page.",
-                )} />
+            <Stat label={t("Approval baaki", "Awaiting approval")} value={waiting} href="/review" icon="check-check" tone={waiting || needsText ? "amber" : "slate"}
+              sub={needsText
+                ? t(`+ ${needsText} mein aapka text chahiye`, `+ ${needsText} ${needsText === 1 ? "needs" : "need"} your text`)
+                : waiting ? t("Approve karo, tabhi jayengi", "Sent only after you approve") : t("Abhi koi mail nahi ruki", "No mail waiting right now")}
+              info={t(
+                "Saare campaigns ke drafts jo aapke Approve ka wait kar rahi hain (AI, template ya lead ke apne text se bani). Approve karna aakhri step hai: aapke click ke bina koi mail approve nahi hoti, campaign Start se bhi nahi. Draft ya ruke hue campaign ke drafts bhi yahan gine jaate hain, par wo campaign start / resume hone ke baad hi jaate hain. 'Text chahiye' wali mails mein pehle [OBSERVATION] jaisi jagah likhni hai ya toota hua rule theek karna hai. Click karke Approve page kholo.",
+                "Drafts of all campaigns waiting for your Approve (made by the AI, from a template or from the lead's own text). Approving is the last step: no mail is approved without your click, not even by starting a campaign. Drafts of a campaign in draft or paused count here too, but they go out only once that campaign is started / resumed. Mails marked 'Needs your text' first need you to write a part like [OBSERVATION] or fix a broken rule. Click to open the Approve page.",
+              )} />
             <Stat label={t("Bheji / limit", "Sent / limit")} value={<>{today}<span className="text-slate-300"> / </span><span className="text-slate-500">{cap}</span></>} icon="trending" tone="indigo"
               sub={<><div className="mb-1.5 mt-1"><Progress value={cap ? today / cap : 0} tone={cap && today >= cap ? "amber" : "indigo"} /></div>{t(`Warm-up · max ${top}/din${planCaps ? " (plan ka 40%)" : ""}`, `Warm-up · max ${top}/day${planCaps ? " (40% of plan)" : ""}`)}</>}
               info={t(
@@ -410,16 +485,26 @@ export default async function Dashboard() {
                 "How many mails went out today (live and dry-run) and what today's limit is. To keep a new domain safe, warm-up raises the limit a little on every sending day (a day a live mail went out), up to the warm-up max. With a plan limit set, it never goes above 40% of the plan. The day is counted in the campaign's timezone.",
               )} />
             <Stat label={t("Agli mail kab", "Next mail")} value={stopped ? t("Ruki hui", "Stopped") : needApproval ? t("Approval ka wait", "Awaiting approval") : next ? when(next, t) : "—"} icon="clock" tone={stopped ? "red" : needApproval ? "amber" : "sky"}
-              sub={needApproval ? t("Approve karo, tabhi agli mail jayegi", "The next mail goes once you approve") : `Window ${s.windowStart}-${s.windowEnd} · ${tz}`}
+              sub={needApproval ? t("Approve karo, tabhi agli mail jayegi", "The next mail goes once you approve")
+                : !stopped && !next && silent ? t("Test address nahi: koi mail nahi jaati", "No test address: no mail goes out")
+                : !stopped && !next && s.dryRun && dryDone > 0 ? t("Test mails ja chuki · leads ko LIVE ke baad", "Test mails sent · leads get them after LIVE")
+                : !stopped && !next && idleOnly ? t("Drafts ka campaign chal nahi raha", "The drafts' campaign is not running")
+                : `Window ${s.windowStart}-${s.windowEnd} · ${tz}`}
               info={t(
-                "Worker agli mail kab bhejega (IST mein). Mails sirf sending window ke andar jaati hain, jo campaign ke timezone mein hai, aur har mail ke beech kuch minute ka gap rehta hai. Queue khali ho to yahan — dikhta hai. Mails approval ke liye ruki hon aur koi approve ki hui mail ready na ho, to 'Approval ka wait' dikhta hai.",
-                "When the worker sends the next mail (in IST). Mails only go out inside the sending window, which is in the campaign's timezone, with a gap of a few minutes between mails. With an empty queue this shows —. If mails wait for approval and no approved mail is ready, it shows 'Awaiting approval'.",
+                "Worker agli mail kab bhejega (IST mein). Sirf chal rahe (start kiye) campaigns ki approve ki hui mails jaati hain: sending window ke andar (campaign ke timezone mein), har mail ke beech kuch minute ka random gap. Send queue khaali ho to yahan — dikhta hai; DRY-RUN mein jo mails test address pe ja chuki, wo LIVE ke baad hi leads ko jaati hain. Mails approval ke liye ruki hon aur koi approve ki hui mail baaki na ho, to 'Approval ka wait' dikhta hai.",
+                "When the worker sends the next mail (in IST). Only approved mails of running (started) campaigns go out: inside the sending window (in the campaign's timezone), with a random gap of a few minutes between mails. With an empty send queue this shows —; in DRY-RUN, mails already sent to the test address go to the leads only after LIVE. If mails wait for approval and no approved mail is left, it shows 'Awaiting approval'.",
               )} />
-            <Stat label="Queue" value={queue} icon="list" tone={review ? "amber" : "indigo"} href={review ? "/contacts?status=needs_review" : undefined}
-              sub={review ? t(`${review} review ke liye ruke`, `${review} waiting for review`) : t("Chal rahe campaigns ke baaki leads", "Leads left in running campaigns")}
+            <Stat label="Send queue" value={queued} icon="list" tone="indigo" href={liveIds.length ? "/campaigns" : undefined}
+              sub={toCreate
+                ? t(`${toCreate} leads ke drafts abhi banne baaki`, `${toCreate} ${toCreate === 1 ? "draft" : "drafts"} still to be made`)
+                : s.dryRun
+                  ? dryDone
+                    ? t(`${dryDone} test pe ja chuki · LIVE ke baad leads ko`, `${dryDone} sent as tests · to leads after LIVE`)
+                    : t("Approve ho chuki, test address pe jayengi", "Approved, they go to your test address")
+                  : t("Approve ho chuki, apne aap jayengi", "Approved, they go out by themselves")}
               info={t(
-                "Chal rahe campaigns ke kitne leads ko abhi mail jaani baaki hai. 'Review chahiye' wale leads isme nahi hain; unhe approve karoge tabhi wo queue mein aayenge.",
-                "How many leads in running campaigns still have to be mailed. Leads marked 'Needs review' are not included; they join the queue only once you approve them.",
+                "Chal rahe (start kiye) campaigns ki wo mails jo aap approve kar chuke ho aur jo abhi jaani baaki hain. Worker inhe sending window, random gap, daily limit aur plan ke 40% ke andar ek-ek karke apne aap bhejta hai. DRY-RUN mein sirf wo gini jaati hain jo abhi test address pe nahi gayi. Neeche ki line: kitne Ready leads ka draft worker ne abhi banana hai (template se har minute 50 tak, AI se 3).",
+                "Mails of running (started) campaigns that you have approved and that still have to go out. The worker sends them one by one by itself, within the sending window, a random gap, the daily limit and 40% of the plan. In DRY-RUN only those not yet sent to the test address count. The line below: how many Ready leads the worker still has to make a draft for (up to 50 a minute from a template, 3 with the AI).",
               )} />
             <Stat label="Health" value={<span className="inline-flex items-center gap-2"><span className={`h-2.5 w-2.5 rounded-full ${h.dot}`} />{h.label[lang]}</span>} icon="activity" tone={h.tone}
               href={health !== "green" ? "#issues" : undefined}
@@ -509,8 +594,8 @@ export default async function Dashboard() {
         title="Active campaigns"
         icon="megaphone"
         info={t(
-          "Jo campaigns chal rahe hain, ruke hue hain ya draft mein hain. Progress batata hai kitne leads ka kaam ho gaya. 'Kab tak khatam' ek andaza hai jo daily limit aur sending window se nikalta hai.",
-          "Campaigns that are running, paused or in draft. Progress shows how many leads are done. 'Est. finish' is an estimate based on the daily limit and the sending window.",
+          "Jo campaigns chal rahe hain, ruke hue hain ya draft mein hain. Progress batata hai kitne leads ka kaam ho gaya. 'Approval baaki' = kitne drafts aapke Approve ka wait kar rahe hain (aur kitno mein pehle aapka text chahiye); draft ya ruke hue campaign ke drafts start / resume ke baad hi jaate hain. 'Kab tak khatam' ek andaza hai jo daily limit aur sending window se nikalta hai, agar aap drafts approve karte raho.",
+          "Campaigns that are running, paused or in draft. Progress shows how many leads are done. 'Awaiting approval' = how many drafts wait for your Approve (and how many need your text first); drafts of a campaign in draft or paused go out only after it is started / resumed. 'Est. finish' is an estimate based on the daily limit and the sending window, if you keep approving the drafts.",
         )}
         sub={progress.length
           ? t(`${progress.length} campaign · chal rahe, ruke hue aur draft`, `${progress.length} ${progress.length === 1 ? "campaign" : "campaigns"} · running, paused and draft`)
@@ -520,9 +605,9 @@ export default async function Dashboard() {
         {progress.length ? (
           <div className="overflow-x-auto">
             <table className="tbl tbl-stack">
-              <thead><tr><th>{t("Naam", "Name")}</th><th>Status</th><th>Progress</th><th className="md:text-right">{t("Baaki", "Remaining")}</th><th>{t("Kab tak khatam", "Est. finish")}</th></tr></thead>
+              <thead><tr><th>{t("Naam", "Name")}</th><th>Status</th><th>Progress</th><th className="md:text-right">{t("Baaki", "Remaining")}</th><th className="md:text-right">{t("Approval baaki", "Awaiting approval")}</th><th>{t("Kab tak khatam", "Est. finish")}</th></tr></thead>
               <tbody>
-                {progress.map(({ c, total, done, remaining, finish }) => (
+                {progress.map(({ c, total, done, remaining, toApprove, toText, finish }) => (
                   <tr key={c.id}>
                     <td><Link href={`/campaigns/${c.id}`} className="link break-words">{c.name}</Link></td>
                     <td data-label="Status"><Badge v={c.status} /></td>
@@ -533,6 +618,23 @@ export default async function Dashboard() {
                       </div>
                     </td>
                     <td data-label={t("Baaki", "Remaining")} className="tabular-nums md:text-right">{remaining}</td>
+                    <td data-label={t("Approval baaki", "Awaiting approval")} className="tabular-nums md:text-right">
+                      {/* one block, so on phones it stays on the right of its label */}
+                      <div>
+                        {toApprove ? <Link href={`/review?c=${c.id}`} className="link">{toApprove}</Link> : <span className="text-slate-400">0</span>}
+                        {toText > 0 && (
+                          <Link href={`/review?s=text&c=${c.id}`} className="ml-1.5 whitespace-nowrap text-xs font-medium text-amber-700 hover:underline">
+                            {t(`+${toText} text chahiye`, `+${toText} ${toText === 1 ? "needs" : "need"} your text`)}
+                          </Link>
+                        )}
+                        {/* approving the drafts of a campaign in draft or paused sends nothing until it is started / resumed */}
+                        {toApprove + toText > 0 && !isLive(c) && (
+                          <span className="block text-2xs text-slate-400">
+                            {c.status === "paused" ? t("Resume ke baad hi jayengi", "Sent only after resume") : t("Start ke baad hi jayengi", "Sent only after start")}
+                          </span>
+                        )}
+                      </div>
+                    </td>
                     <td data-label={t("Kab tak khatam", "Est. finish")} className="whitespace-nowrap">{fmtDate(finish)}</td>
                   </tr>
                 ))}
@@ -541,7 +643,10 @@ export default async function Dashboard() {
           </div>
         ) : (
           <EmptyState icon="megaphone" title={t("Koi active campaign nahi", "No active campaigns")}
-            text={t("Import ki hui list se campaign banao. Pehle 5 sample mails banengi, unhe padh ke start karo.", "Create a campaign from an imported list. First 5 sample mails are written; read them, then start.")}
+            text={t(
+              "Import ki hui list se campaign banao aur start karo. Worker har lead ka draft banayega; aap approve karoge tabhi mail jayegi.",
+              "Create a campaign from an imported list and start it. The worker makes a draft for every lead; a mail goes out only once you approve it.",
+            )}
             href="/campaigns" cta={t("Campaign banao", "Create campaign")} />
         )}
       </Section>

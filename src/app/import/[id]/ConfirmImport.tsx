@@ -37,8 +37,9 @@ export function ConfirmImport({ listId, review = 0, expected, className = "btn-p
         toast.success(
           j.created === 1 ? t("1 lead add ho gaya", "1 lead added") : t(`${j.created} leads add ho gaye`, `${j.created} leads added`),
           review
-            ? t("'Review chahiye' wale Contacts mein approve karo, phir campaign banao.", "Approve the 'Needs review' leads in Contacts, then create a campaign.")
-            : t("Ab campaign banao: pehle 5 sample mails banengi, unhe padh ke approve karna hai.", "Now create a campaign: 5 sample mails are made first, for you to read and approve."),
+            ? t("'Review chahiye' wale Contacts mein approve karo, phir campaign banao aur start karo.", "Approve the 'Needs review' leads in Contacts, then create a campaign and start it.")
+            : t("Ab campaign banao aur start karo (Start se koi mail approve nahi hoti; chaho to pehle 5 sample drafts dekh lo). Phir har draft Approve page pe aapka wait karega.",
+              "Now create a campaign and start it (starting approves nothing; you can preview 5 sample drafts first). Every draft then waits for you on the Approve page."),
           review ? { href: "/contacts?status=needs_review", cta: t("Review wale dekho", "See leads to review") } : { href: "/campaigns", cta: t("Campaign banao", "Create campaign") },
         );
       }

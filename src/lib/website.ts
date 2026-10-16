@@ -1,8 +1,9 @@
 /*
  * Does a lead have a website of its own? A "by website" campaign (lib/templates.ts) sends one template to leads
  * without one and another to leads with one. Only the CSV's website value counts: nothing is fetched.
- * A link to a social profile, a link-in-bio page, a map or directory listing, a chat link or a booking / delivery
- * platform is not their own website, so such a lead gets the "no website" template.
+ * A link to a social profile, a link-in-bio page, a map or directory listing, a chat link, a booking / delivery
+ * platform or a free / temporary page on a site builder's address (bella.wixsite.com, bella.eatbu.com…) is not a website
+ * of their own, so such a lead gets a "no website" template.
  * Pure code (no server imports): the campaign form and the Settings preview use it in the browser too.
  */
 
@@ -12,10 +13,15 @@ const NOT_OWN_HOSTS = [
   "youtube.com", "youtu.be", "linkedin.com", "pinterest.com", "snapchat.com",
   "linktr.ee", "linktree.com", "beacons.ai", "bio.link", "linkin.bio", "lnk.bio", "taplink.cc", "solo.to",
   "wa.me", "whatsapp.com", "t.me", "telegram.me",
-  "goo.gl", "g.page", "g.co", "business.site",
+  "goo.gl", "g.page", "g.co",
   "m.me", "messenger.com", "bit.ly", "tinyurl.com", "ow.ly",
   "pagesjaunes.fr", "lafourchette.com", "doctolib.fr", "planity.com", "booksy.com", "fresha.com", "calendly.com", "foursquare.com",
   "resy.com", "zenchef.com",
+  // free or temporary pages on a builder's own address: not a site on their own domain
+  "wixsite.com", "eatbu.com", "metro.rest", "framer.website", "framer.ai", "myshopify.com", "mailchimpsites.com", "ody.app", "webflow.io",
+  "business.site", "sites.google.com", "jimdosite.com", "jimdofree.com", "weebly.com", "wordpress.com", "blogspot.com", "carrd.co",
+  "site123.me", "webnode.page", "webnode.fr", "webnode.com", "godaddysites.com", "ueniweb.com", "squarespace.com", "strikingly.com",
+  "mystrikingly.com", "netlify.app", "vercel.app", "github.io", "canva.site", "my.canva.site", "notion.site", "hostinger.site", "odoo.com",
 ];
 /** Brands with a site per country (tripadvisor.fr, deliveroo.co.uk, google.com/maps…): matched by name, any ending. */
 const NOT_OWN_BRANDS = [
@@ -61,9 +67,7 @@ function isBrand(host: string, brand: string) {
   return i >= 0 && i < parts.length - 1 && parts.slice(i + 1).every((p) => p.length <= 3);
 }
 
-const notOwn = (host: string) => NOT_OWN_HOSTS.some((h) => host === h || host.endsWith("." + h))
-  // Google Sites is a real (free) website builder; every other Google address is a map or a listing
-  || NOT_OWN_BRANDS.some((b) => isBrand(host, b) && !(b === "google" && host.startsWith("sites.")));
+const notOwn = (host: string) => NOT_OWN_HOSTS.some((h) => host === h || host.endsWith("." + h)) || NOT_OWN_BRANDS.some((b) => isBrand(host, b));
 
 /**
  * A cell may hold several links ("bellavista.fr, facebook.com/bella"), a label ("Site: bellavista.fr") or no web

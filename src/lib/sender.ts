@@ -9,6 +9,7 @@ import { emailDomain, siteDomain } from "./importer";
 import { partsIn } from "./time";
 import { log, event } from "./log";
 import { textKey } from "./english";
+import { withdrawDraft } from "./approval";
 
 type SmtpErr = { code?: string; command?: string; responseCode?: number; response?: string; message?: string; stage?: "connect" | "send" };
 
@@ -74,7 +75,12 @@ export async function claimForSend(msg: Pick<Message, "id" | "status">, lead: Pi
   return db.runTransaction(async (tx) => {
     const [m, l, ce, cb, ...supp] = await tx.getAll(msgRef, leadRef, emailRef, bizRef, ...suppRefs);
     if (!m.exists || m.get("status") !== msg.status || l.get("status") !== "ready") return "lost" as const;
-    if (supp.some((x) => x.exists)) { tx.update(leadRef, { status: "suppressed", updatedAt: nowIso() }); return "suppressed" as const; }
+    if (supp.some((x) => x.exists)) {
+      // the mail leaves the queue for good too, so it never holds up the approved mails behind it
+      tx.update(leadRef, { status: "suppressed", updatedAt: nowIso() });
+      tx.update(msgRef, { status: "blocked", approved: false, error: "address or domain on the block list" });
+      return "suppressed" as const;
+    }
     // the ledger may only already hold this address if it was claimed by THIS message (a retry after a clear refusal)
     if ((ce.exists && ce.get("messageRef") !== msg.id) || (cb.exists && cb.get("messageRef") !== msg.id)) {
       tx.update(leadRef, { status: "already_contacted", updatedAt: nowIso() });
@@ -107,7 +113,9 @@ export async function trySendOne(): Promise<string> {
     if (!msg) continue;
     const leadSnap = await C.leads.doc(msg.leadId).get();
     const lead = { id: leadSnap.id, ...leadSnap.data() } as Lead;
-    if (lead.status !== "ready") continue;
+    // a lead that may no longer be mailed (blocked, opted out, replied…): take its mail out of the queue for good,
+    // otherwise it would come back first on every tick and hold up every approved mail behind it
+    if (lead.status !== "ready") { await withdrawDraft(msg.id, `lead is ${lead.status}`); continue; }
     const list = (await C.lists.doc(lead.listId).get()).data() as LeadList | undefined;
     const parts = mailParts(s, msg.body, msg.language, list?.sourceNote || "a public business directory");
     // what the Sent page shows: the subject and the full text exactly as they went out

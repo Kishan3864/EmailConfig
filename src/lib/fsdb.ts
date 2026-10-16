@@ -55,20 +55,30 @@ export async function count(q: Query) {
 }
 
 /** Extra facts about a lead from the import file. The AI may use only these (and the lead's own website description). */
-export type LeadExtra = { contactName?: string | null; city?: string | null; category?: string | null; about?: string | null; note?: string | null };
+export type LeadExtra = {
+  contactName?: string | null; city?: string | null; category?: string | null; about?: string | null; note?: string | null;
+  // for templates: Google review count and rating, one real problem I saw on their website ({{reviews}} {{rating}} {{observation}})
+  reviews?: string | null; rating?: string | null; observation?: string | null;
+  // a mail written for this lead in the import file: used instead of the template / AI when both are given
+  customSubject?: string | null; customBody?: string | null;
+};
 export type Lead = LeadExtra & {
   id: string; email: string; businessKey: string; businessName?: string; website?: string; phone?: string; country?: string;
   listId: string; campaignId?: string | null;
   // ready | needs_review | rejected | sent | check_manual | bounced | replied | opted_out | failed | suppressed | already_contacted
   status: string; facts?: string; factsAt?: string; dryRunAt?: string; createdAt: string; updatedAt: string;
+  hasMessage?: boolean; // a draft exists for this lead (the worker drafts the ones without)
 };
 /**
  * mailType: "ai" (AI writes each mail; also when missing), "tpl1".."tpl6" (one fixed template from Settings for every lead)
- * or "bysite" (tplNoSite for leads without a website of their own, tplSite for leads with one). See lib/templates.ts.
+ * or "bysite" (tplNoSiteIds for leads without a website of their own, tplSiteIds for leads with one: 1-3 each, used in
+ * turn; older campaigns hold a single tplNoSite / tplSite). rot counts the drafts made per group for that rotation.
+ * samplesApproved = the campaign was started (the name is older than the rule that starting approves nothing).
  */
 export type Campaign = {
   id: string; name: string; listId: string; timezone: string; language: string; status: string; samplesApproved: boolean; createdAt: string; startedAt?: string;
-  mailType?: string; tplNoSite?: string | null; tplSite?: string | null;
+  mailType?: string; tplNoSite?: string | null; tplSite?: string | null; tplNoSiteIds?: string[]; tplSiteIds?: string[];
+  rot?: { nosite?: number; site?: number };
   siteSplit?: { site: number; nosite: number }; // "bysite": leads with / without their own website when it was created
 };
 export type Message = {
@@ -78,9 +88,13 @@ export type Message = {
   // enNeeded = it is still missing, enRetryAt = when the worker tries (again), enTries / enError / enAt = failed tries
   subjectEn?: string | null; bodyEn?: string | null; enFor?: string | null; enNeeded?: boolean; enRetryAt?: string | null; enTries?: number;
   enError?: string | null; enAt?: string | null;
-  tplId?: string | null; // the template this draft was filled from (null = written by the AI)
-  edited?: boolean; approved?: boolean;
-  // ready | sending | sent | retry | check_manual | failed | bounced | blocked
+  tplId?: string | null; // the template this draft was filled from (null = written by the AI or the lead's own text)
+  custom?: boolean; // made from the subject + body columns of the import file
+  missing?: string[]; // needs_text: the details the template needs and the lead lacks (I write them, e.g. ["observation"])
+  problems?: string[]; // needs_text: the rules the filled template / own text / AI text broke (I fix them by editing)
+  edited?: boolean; approved?: boolean; approvedAt?: string | null;
+  // needs_text (a template needs a detail the lead lacks: I must write it) | ready | sending | sent | retry | check_manual
+  // | failed | bounced | blocked | rejected
   status: string; attempts: number; dryRunDone: boolean; nextAttemptAt?: string; sendStartedAt?: string; sentAt?: string;
   messageId?: string; smtpResponse?: string; error?: string; createdAt: string;
 };

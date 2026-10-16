@@ -1,17 +1,19 @@
 "use server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { C, db, key, nowIso, count } from "@/lib/fsdb";
+import { C, db, key, nowIso, count, type Lead } from "@/lib/fsdb";
 import { getSettings, saveSettings, setState, DEFAULTS, type Settings } from "@/lib/settings";
 import { testSmtp, testImap, sendTestMail } from "@/lib/mailer";
 import { checkDomain } from "@/lib/dnscheck";
 import { generateSamples, draftForLead } from "@/lib/drafts";
 import { syncInbox } from "@/lib/inbox";
-import { addToLedger, importSentFolder } from "@/lib/ledger";
+import { addToLedger, getAllChunked, importSentFolder } from "@/lib/ledger";
 import { log, event } from "@/lib/log";
 import { chat } from "@/lib/ai";
 import { validateDraft } from "@/lib/validate";
-import { BY_SITE, MAIL_TYPES, isTemplateId } from "@/lib/templates";
+import { BY_SITE, MAIL_TYPES, MAX_PER_GROUP, capsAllowed, isTemplateId, templateVars } from "@/lib/templates";
+import { approveDraft, approveDrafts, withdrawDraft } from "@/lib/approval";
+import { startCampaignCore } from "@/lib/campaign";
 import { AI_DOWN, ensureTranslation } from "@/lib/translate";
 import { hasOwnWebsite } from "@/lib/website";
 import type { T } from "@/lib/i18n";
@@ -201,7 +203,11 @@ export async function addSuppression(fd: FormData) {
     const ref = C.suppression.doc(key(v));
     if (!(await ref.get()).exists) { await ref.set({ value: v, kind, reason, createdAt: nowIso() }); added++; }
     const leads = kind === "email" ? [await C.leads.doc(key(v)).get()] : (await C.leads.where("businessKey", "==", v).get()).docs;
-    for (const l of leads) if (l.exists && ["ready", "needs_review"].includes(l.get("status"))) await setLead(l.id, { status: "suppressed" });
+    for (const l of leads) {
+      if (!l.exists || !["ready", "needs_review"].includes(l.get("status"))) continue;
+      await setLead(l.id, { status: "suppressed" });
+      await withdrawDraft(l.id, "on the block list"); // its unsent mail leaves the queue too
+    }
   }
   revalidatePath("/suppression");
   const already = values.length - added;
@@ -255,13 +261,16 @@ export async function importSentAction() {
 export async function createCampaign(fd: FormData) {
   const listId = String(fd.get("listId"));
   const mailType = String(fd.get("mailType") || "ai");
-  // "by website": both templates must be real ones, so a lead never gets a mail meant for the other group
-  const tplNoSite = String(fd.get("tplNoSite") || ""), tplSite = String(fd.get("tplSite") || "");
-  if (mailType === BY_SITE && (!isTemplateId(tplNoSite) || !isTemplateId(tplSite))) throw new Error("Choose a template for leads without a website and one for leads with a website");
+  // "by website": 1-3 real templates per group (used in turn), so a lead never gets a mail meant for the other group
+  const ids = (k: string) => [...new Set(fd.getAll(k).map(String).filter(isTemplateId))];
+  const tplNoSiteIds = ids("tplNoSite"), tplSiteIds = ids("tplSite");
+  if (mailType === BY_SITE && [tplNoSiteIds, tplSiteIds].some((x) => !x.length || x.length > MAX_PER_GROUP)) {
+    throw new Error("Tick 1-3 templates for leads without a website and 1-3 for leads with a website");
+  }
   const ref = await C.campaigns.add({
     name: String(fd.get("name") || "Campaign"), listId, timezone: String(fd.get("timezone")), language: String(fd.get("language")),
     mailType: (MAIL_TYPES as readonly string[]).includes(mailType) ? mailType : "ai",
-    ...(mailType === BY_SITE ? { tplNoSite, tplSite } : {}),
+    ...(mailType === BY_SITE ? { tplNoSiteIds, tplSiteIds, rot: { nosite: 0, site: 0 } } : {}),
     status: "draft", samplesApproved: false, createdAt: nowIso(),
   });
   // attach every unassigned lead of the list (ready or still needing review)
@@ -300,8 +309,8 @@ export async function samplesAction(id: string) {
     );
   }
   return t(
-    `${made} sample draft${made === 1 ? "" : "s"} taiyaar\nNeeche padho, theek lagein to 'approve karke start karo' dabao.`,
-    `${made} sample draft${made === 1 ? "" : "s"} ready\nRead them below; if they look good, press 'approve and start'.`,
+    `${made} sample draft${made === 1 ? "" : "s"} taiyaar\nNeeche padho. Ye sirf preview hai: start karne se bhi ye approve nahi hote, inhe bhi Approve page pe khud approve karna hoga.`,
+    `${made} sample draft${made === 1 ? "" : "s"} ready\nRead them below. They are only a preview: starting does not approve them either; you approve them yourself on the Approve page.`,
   );
 }
 
@@ -309,11 +318,12 @@ export async function regenerateDraft(messageId: string) {
   const { t } = await getT();
   const ref = C.messages.doc(messageId);
   const m = await ref.get();
-  if (!m.exists || m.get("status") !== "ready") return t("Error: Sirf na bheji gayi draft ka naya version ban sakta hai", "Error: Only an unsent draft can get a new version");
+  if (!m.exists || !["ready", "needs_text"].includes(m.get("status"))) return t("Error: Sirf na bheji gayi draft ka naya version ban sakta hai", "Error: Only an unsent draft can get a new version");
   await ref.delete();
   await C.leads.doc(messageId).update({ hasMessage: false });
   await C.draftJobs.doc(messageId).delete().catch(() => {});
-  const r = await draftForLead(messageId);
+  // same template as before; the new draft is unapproved again, like every draft
+  const r = await draftForLead(messageId, { translateNow: true, prefer: m.get("tplId") });
   revalidateMail(m.get("campaignId"), messageId);
   return r.ok
     ? t("Naya version ban gaya\nPadh ke approve karo.", "New version ready\nRead it, then approve.")
@@ -336,18 +346,17 @@ export async function startCampaign(id: string) {
       `Error: The campaign did not start. ${!dns.spf ? "SPF is missing. " : ""}${!dns.dkim ? `DKIM is missing (selector ${s.dkimSelector}).` : ""}`,
     );
   }
-  const drafts = await count(C.messages.where("campaignId", "==", id));
-  const ready = await count(C.leads.where("campaignId", "==", id).where("status", "==", "ready"));
-  if (drafts < Math.min(5, ready)) return t("Error: Pehle 5 sample drafts banao aur padho", "Error: First make and read the 5 sample drafts");
-  await C.campaigns.doc(id).update({ status: "running", samplesApproved: true, startedAt: nowIso() });
-  // the samples I just read count as approved
-  const samples = await C.messages.where("campaignId", "==", id).where("status", "==", "ready").get();
-  for (const m of samples.docs) if (!m.get("approved")) await m.ref.update({ approved: true, approvedAt: nowIso() });
-  await log("info", "campaign", `campaign ${id} approved and started${s.dryRun ? " (DRY RUN)" : ""}`);
+  if (!(await count(C.leads.where("campaignId", "==", id).where("status", "==", "ready")))) {
+    return t("Error: Is campaign mein koi Ready lead nahi hai\nPehle Contacts mein 'Review chahiye' wale leads approve karo.", "Error: This campaign has no Ready lead\nFirst approve the 'Needs review' leads in Contacts.");
+  }
+  // starting approves NOTHING: the worker now makes a draft for every Ready lead, and each waits for my own Approve
+  await startCampaignCore(id);
+  await log("info", "campaign", `campaign ${id} started, nothing approved${s.dryRun ? " (DRY RUN)" : ""}`);
   revalidatePath(`/campaigns/${id}`);
-  return s.dryRun
-    ? t("Campaign DRY-RUN mein start ho gaya\nMails sirf aapke test address pe jayengi. Nayi drafts Approve page pe aayengi.", "Campaign started in DRY-RUN\nMails only go to your test address. New drafts will appear on the Approve page.")
-    : t("Campaign start ho gaya\nWorker sending window mein apne aap bhejega. Nayi drafts Approve page pe aayengi.", "Campaign started\nThe worker sends automatically in the sending window. New drafts will appear on the Approve page.");
+  return t(
+    "Campaign start ho gaya: koi mail approve nahi hui\nWorker ab har Ready lead ka draft banayega (thode-thode karke). Sab Approve page pe 'Approval baaki' mein aayenge; jo aap approve karoge, wahi apne aap bheji jayegi.",
+    "Campaign started: nothing was approved\nThe worker now makes a draft for every Ready lead, a batch at a time. They all show up on the Approve page as 'Awaiting approval'; only the ones you approve are sent, automatically.",
+  );
 }
 
 export async function pauseCampaign(id: string) {
@@ -360,7 +369,7 @@ export async function pauseCampaign(id: string) {
 export async function resumeCampaign(id: string) {
   const { t } = await getT();
   const c = await C.campaigns.doc(id).get();
-  if (!c.get("samplesApproved")) return t("Error: Pehle samples approve karo", "Error: Approve the samples first");
+  if (!c.get("samplesApproved")) return t("Error: Pehle campaign start karo", "Error: Start the campaign first");
   await c.ref.update({ status: "running" });
   await log("info", "campaign", `campaign ${id} resumed`);
   revalidatePath(`/campaigns/${id}`);
@@ -381,37 +390,71 @@ export async function setModeAction(live: boolean) {
 }
 
 // ---------------- per-mail approval ----------------
-async function approveOne(id: string) {
-  const ref = C.messages.doc(id);
-  const m = await ref.get();
-  if (!m.exists || m.get("status") !== "ready") return false;
-  await ref.update({ approved: true, approvedAt: nowIso() });
-  await event(id, "approved_mail", "mail approved for sending");
-  return true;
+// Approving is the LAST step and only ever happens here, from my own click (lib/approval.ts approveDraft).
+// An approved mail is in the send queue: the worker sends it by itself within the sending rules.
+const QUEUED: [string, string] = [
+  "Ab ye send queue mein hai: worker sending window, gap aur daily limit ke andar apne aap bhejega.",
+  "It is now in the send queue: the worker sends it by itself within the sending window, gap and daily limit.",
+];
+
+/** What happens to approved mails next: the queue, or (campaign not started / paused) nothing until it runs. */
+async function queuedText(messageIds: string[], t: T) {
+  const msgs = await getAllChunked(messageIds.map((id) => C.messages.doc(id)));
+  const campIds = [...new Set(msgs.map((m) => m.get("campaignId")).filter(Boolean))] as string[];
+  const camps = await getAllChunked(campIds.map((id) => C.campaigns.doc(id)));
+  const waits = camps.some((c) => !c.exists || c.get("status") !== "running" || !c.get("samplesApproved"));
+  return waits
+    ? t(
+      "Approve ho gayi, par iska campaign abhi chal nahi raha (start nahi hua ya ruka hai): mail tab jayegi jab aap Campaign page pe use start / resume karoge.",
+      "Approved, but its campaign is not running yet (not started or paused): the mail goes out once you start / resume it on the Campaign page.",
+    )
+    : t(QUEUED[0], QUEUED[1]);
 }
 
-export async function approveMessage(id: string) {
+const CHANGED: [string, string] = [
+  "Ye mail aapke padhne ke baad badal gayi (naya version ya edit), isliye approve nahi hui. Page dobara padh ke approve karo.",
+  "This mail changed after you read it (a new version or an edit), so it was not approved. Read it again, then approve.",
+];
+
+/** key = textKey of the text the card showed: only exactly that text can be approved. */
+export async function approveMessage(id: string, key?: string) {
   const { t } = await getT();
-  const ok = await approveOne(id);
-  revalidatePath("/review");
-  return ok
-    ? t("Mail approve ho gayi\nSending window khulte hi worker ise bhej dega.", "Mail approved\nThe worker sends it as soon as the sending window opens.")
-    : t("Error: Ye mail ab approval ke liye nahi ruki hai", "Error: This mail is no longer waiting for approval");
+  const r = await approveDraft(id, key);
+  const m = await C.messages.doc(id).get();
+  revalidateMail(m.get("campaignId"), id);
+  if (r === "ok") return t(`Mail approve ho gayi\n`, `Mail approved\n`) + (await queuedText([id], t));
+  if (r === "needs_text") return t("Error: Is mail mein pehle apna text likho\n'Text edit karo' se [OBSERVATION] jaisi jagah bharo, save karo, phir approve karo.", "Error: Write your text into this mail first\nUse 'Edit text' to fill in the [OBSERVATION] part, save, then approve.");
+  if (r === "changed") return `Error: ${t(...CHANGED)}`;
+  return t("Error: Ye mail ab approval ke liye nahi ruki hai", "Error: This mail is no longer waiting for approval");
 }
 
+/**
+ * The ticked mails ("Selected approve karo") or all shown ("Sab approve karo"): the page asks for a second click first.
+ * Items are "id::key" (key = the text the card showed), so a mail that changed since is not approved unread.
+ */
+export async function approveSelected(items: string[]) {
+  const { t } = await getT();
+  if (!items.length) return t("Error: Koi mail chuni nahi gayi", "Error: No mail selected");
+  const r = await approveDrafts(items);
+  revalidatePath("/review");
+  revalidatePath("/campaigns", "layout");
+  const extra = [
+    r.needsText ? t(`${r.needsText} mail mein abhi aapka text chahiye, wo approve nahi hui.`, `${r.needsText} still need your text and were not approved.`) : "",
+    r.changed ? t(`${r.changed} mail aapke padhne ke baad badal gayi, wo approve nahi hui: dobara padho.`, `${r.changed} changed after you read them and were not approved: read them again.`) : "",
+    r.gone ? t(`${r.gone} ab approval ke liye nahi ruki thi.`, `${r.gone} were no longer waiting for approval.`) : "",
+  ].filter(Boolean).join(" ");
+  if (!r.ok) return `Error: ${t("Koi mail approve nahi hui", "No mail was approved")}${extra ? `\n${extra}` : ""}`;
+  return `${extra ? "Warning: " : ""}${t(`${r.ok} ${r.ok === 1 ? "mail" : "mails"} approve ho gayi`, `${r.ok} ${r.ok === 1 ? "mail" : "mails"} approved`)}\n${await queuedText(r.okIds, t)}${extra ? ` ${extra}` : ""}`;
+}
 export async function approveAllShown(ids: string[]) {
-  const { t } = await getT();
-  let n = 0;
-  for (const id of ids) if (await approveOne(id)) n++;
-  revalidatePath("/review");
-  return t(`${n} mails approve ho gayi\nSending window mein worker inhe ek-ek karke bhejega.`, `${n} mails approved\nThe worker sends them one by one in the sending window.`);
+  return approveSelected(ids);
 }
 
 export async function rejectMessage(id: string) {
   const { t } = await getT();
   const ref = C.messages.doc(id);
   const m = await ref.get();
-  if (!m.exists || m.get("status") !== "ready") return t("Error: Ye mail ab approval ke liye nahi ruki hai", "Error: This mail is no longer waiting for approval");
+  if (!m.exists || !["ready", "needs_text"].includes(m.get("status"))) return t("Error: Ye mail ab approval ke liye nahi ruki hai", "Error: This mail is no longer waiting for approval");
   // a rejected mail is never sent, so it needs no English version either
   await ref.update({ status: "rejected", approved: false, enNeeded: false, enRetryAt: null });
   await setLead(id, { status: "rejected" });
@@ -424,14 +467,18 @@ export async function saveDraftEdit(id: string, fd: FormData) {
   const { t } = await getT();
   const ref = C.messages.doc(id);
   const m = await ref.get();
-  if (!m.exists || m.get("status") !== "ready") return t("Error: Ye draft ab edit nahi ho sakta", "Error: This draft can no longer be edited");
+  if (!m.exists || !["ready", "needs_text"].includes(m.get("status"))) return t("Error: Ye draft ab edit nahi ho sakta", "Error: This draft can no longer be edited");
   const subject = String(fd.get("subject") || "").trim();
   const body = String(fd.get("body") || "").replace(/\r/g, "").trim();
-  const errors = validateDraft(subject, body, m.get("language"), m.get("businessName") || "");
+  // the lead's details (a business name in capitals, the city…) are not my own ALL CAPS
+  const [ld, s] = await Promise.all([C.leads.doc(id).get(), getSettings()]);
+  const allow = ld.exists ? capsAllowed(templateVars(ld.data() as Lead, s)) : [];
+  const errors = validateDraft(subject, body, m.get("language"), m.get("businessName") || "", allow);
   if (errors.length) return t("Error: Edit save nahi hua\n", "Error: Edit not saved\n") + draftProblems(errors, t);
   const foreign = m.get("language") !== "en";
   // the old English version belongs to the old text: drop it, and make a new one from the saved text right away
-  await ref.update({ subject, body, subjectEn: null, bodyEn: null, enFor: null, enNeeded: foreign, enRetryAt: foreign ? nowIso() : null, enTries: 0, enError: null, edited: true, approved: false, approvedAt: null });
+  // a draft that waited for my text is now complete ("ready"); either way only my own Approve can approve it
+  await ref.update({ subject, body, status: "ready", missing: [], problems: [], subjectEn: null, bodyEn: null, enFor: null, enNeeded: foreign, enRetryAt: foreign ? nowIso() : null, enTries: 0, enError: null, edited: true, approved: false, approvedAt: null });
   await event(id, "edited", "draft edited by hand");
   const tr: { ok: boolean; error?: string } = foreign ? await ensureTranslation(id).catch((e) => ({ ok: false, error: msg(e) })) : { ok: true };
   revalidateMail(m.get("campaignId"), id);
@@ -462,6 +509,7 @@ export async function translateMessage(id: string) {
   const m = await C.messages.doc(id).get();
   if (!m.exists) return t("Error: Ye mail nahi mili", "Error: This mail was not found");
   if (m.get("language") === "en") return t("Ye mail English mein hi hai\nAlag translation ki zaroorat nahi.", "This mail is already in English\nNo translation needed.");
+  if (m.get("status") === "needs_text") return t("Error: Pehle apna text likh ke save karo\nTranslation uske baad apne aap banega.", "Error: Write and save your text first\nThe translation is made after that.");
   const r = await ensureTranslation(id, true);
   revalidateMail(m.get("campaignId"), id);
   return r.ok

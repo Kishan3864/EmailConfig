@@ -2,7 +2,7 @@
 // and when a stored English translation still counts.
 //   npm run test:templates
 import { DEFAULTS, type Settings } from "../src/lib/settings";
-import { TEMPLATE_IDS, fillTemplate, mailPlan, suggestPair, templateForLead, templateOf, templateVars } from "../src/lib/templates";
+import { TEMPLATE_IDS, capsAllowed, fillForLead, fillTemplate, mailPlan, rotate, suggestGroup, templateForLead, templateOf, templatesForLead, templateVars } from "../src/lib/templates";
 import { siteStatus } from "../src/lib/website";
 import { englishOf, textKey } from "../src/lib/english";
 import { validateDraft } from "../src/lib/validate";
@@ -22,7 +22,7 @@ check("site: null is no website", has(null), false);
 check("site: a dash or n/a is no website", [has("-"), has("n/a"), has("non")], [false, false, false]);
 check("site: own domain", siteStatus("https://www.bellavista.fr/menu"), { has: true, domain: "bellavista.fr" });
 check("site: own subdomain named booking is still their own", has("https://booking.bellavista.fr"), true);
-check("site: free builder site counts as a website", [has("bella.wixsite.com/site"), has("sites.google.com/view/bella")], [true, true]);
+check("site: a free or temporary builder page is not a website of their own", ["bella.wixsite.com/site", "sites.google.com/view/bella", "bella.eatbu.com", "lepetit.metro.rest", "bella.framer.website", "bella.myshopify.com", "bella.mailchimpsites.com", "bella.ody.app", "bella.webflow.io", "bella.business.site"].map(has), [false, false, false, false, false, false, false, false, false, false]);
 check("site: social profiles are not a website", [has("facebook.com/bella"), has("https://m.facebook.com/x"), has("instagram.com/x"), has("tiktok.com/@x")], [false, false, false, false]);
 check("site: link-in-bio and chat links are not a website", [has("linktr.ee/x"), has("https://wa.me/33600000000")], [false, false]);
 check("site: maps and listings are not a website", [has("https://maps.app.goo.gl/abc"), has("https://www.google.com/maps/place/x"), has("g.page/x"), has("x.business.site"), has("tripadvisor.co.uk/x"), has("pagesjaunes.fr/pros/1")], [false, false, false, false, false, false]);
@@ -48,13 +48,23 @@ check("route: by website, facebook page -> nosite template", templateForLead(bys
 check("route: by website, own website -> site template", templateForLead(bysite, "bella.fr")?.id, "tpl6");
 check("route: one template for everyone", [templateForLead({ mailType: "tpl2" }, "")?.id, templateForLead({ mailType: "tpl2" }, "bella.fr")?.id], ["tpl2", "tpl2"]);
 check("route: AI campaign (also without mailType) uses no template", [templateForLead({ mailType: "ai" }, "x.fr"), templateForLead({}, null)], [null, null]);
-check("route: by website with one id missing uses the other for everyone", mailPlan({ mailType: "bysite", tplSite: "tpl6" }), { kind: "bysite", nosite: "tpl6", site: "tpl6" });
+check("route: by website with one id missing uses the other for everyone", mailPlan({ mailType: "bysite", tplSite: "tpl6" }), { kind: "bysite", nosite: ["tpl6"], site: ["tpl6"] });
+const multi = { mailType: "bysite", tplNoSiteIds: ["tpl3", "tpl5", "tpl1"], tplSiteIds: ["tpl4", "tpl6"] };
+check("route: 1-3 templates per group", [templatesForLead(multi, "")?.ids, templatesForLead(multi, "bella.fr")?.ids, templatesForLead(multi, "")?.group], [["tpl3", "tpl5", "tpl1"], ["tpl4", "tpl6"], "nosite"]);
+check("route: more than 3 ticked are cut to 3, unknown ids dropped", mailPlan({ mailType: "bysite", tplNoSiteIds: ["tpl1", "x", "tpl2", "tpl3", "tpl4"], tplSiteIds: ["tpl6"] }), { kind: "bysite", nosite: ["tpl1", "tpl2", "tpl3"], site: ["tpl6"] });
+check("route: a draft shows the template it was made from", templateForLead(multi, "", "tpl5")?.id, "tpl5");
+// round-robin: 30 leads over 3 templates -> 10 each; 5 over 2 -> 3 and 2
+const spread = (ids: string[], n: number) => { const c: Record<string, number> = {}; for (let i = 0; i < n; i++) { const id = rotate(ids, i); c[id] = (c[id] || 0) + 1; } return c; };
+check("rotate: even over 3 templates", spread(["tpl3", "tpl5", "tpl1"], 30), { tpl3: 10, tpl5: 10, tpl1: 10 });
+check("rotate: as even as possible over 2", spread(["tpl4", "tpl6"], 5), { tpl4: 3, tpl6: 2 });
 
 // ---- the pair the campaign form suggests ----
 const s: Settings = { ...DEFAULTS, senderName: "Kishan", business: "Brighton Solution" };
 const choices = TEMPLATE_IDS.map((id) => { const x = templateOf(s, id); return { id, for: x.for, lang: detectLang(fillTemplate(x.body, templateVars({ businessName: "Bella Vista" }, s))) }; });
-check("suggest: French campaign gets the French pair", suggestPair(choices, "fr"), { nosite: "tpl5", site: "tpl6" });
-check("suggest: English campaign gets the English pair", suggestPair(choices, "en"), { nosite: "tpl3", site: "tpl4" });
+check("suggest: French campaign ticks the French templates of each group", [suggestGroup(choices, "fr", "nosite"), suggestGroup(choices, "fr", "site")], [["tpl5"], ["tpl6"]]);
+check("suggest: English campaign ticks the English ones (no-website group: own tag first)", [suggestGroup(choices, "en", "nosite"), suggestGroup(choices, "en", "site")], [["tpl3"], ["tpl4"]]);
+check("suggest: nothing in the campaign language ticks nothing (no other-language fallback)", suggestGroup(choices, "de", "site"), []);
+check("suggest: at most 3 per group", suggestGroup(TEMPLATE_IDS.map((id) => ({ id, for: "nosite" as const, lang: "fr" })), "fr", "nosite").length, 3);
 check("suggest: unknown tag in stored settings reads as any", templateOf({ ...s, tpl1For: "oops" }, "tpl1").for, "any");
 
 // ---- filling: placeholders, {{website}}, French spacing ----
@@ -64,6 +74,17 @@ check("fill: {{website}} is empty for a facebook page (default used)", fillTempl
 check("fill: empty value leaves no space before the comma", fillTemplate("Hello {{contact}},", vars()), "Hello,");
 check("fill: empty value in the middle of a line", fillTemplate("in {{city}} today", vars()), "in today");
 check("fill: two empty values before a comma", fillTemplate("Hello {{contact}} {{city}}, how are you", vars()), "Hello, how are you");
+const rich = templateVars({ businessName: "Bella Vista", reviews: "331", rating: "4.6", observation: "votre menu en ligne est une photo floue" }, s);
+check("fill: {{reviews}} and {{rating}}", fillTemplate("Avec {{reviews}} avis ({{rating}}★)", rich), "Avec 331 avis (4.6★)");
+check("fill: {{reviews|beaucoup d'}} fallback", fillTemplate("Avec {{reviews|beaucoup d'}} avis", vars()), "Avec beaucoup d' avis");
+check("text needed: a missing {{observation}} never uses its fallback", fillForLead("Sujet", "J'ai vu que {{observation|votre site est lent}}. Bonjour ?", vars()), { subject: "Sujet", body: "J'ai vu que [OBSERVATION]. Bonjour ?", missing: ["observation"] });
+check("text needed: with an observation the draft is complete", fillForLead("Sujet", "J'ai vu que {{observation}}.", rich).missing, []);
+// capitals from placeholder values are theirs; capitals in my own text are not
+const caps = (e: string[]) => e.filter((x) => x.startsWith("ALL CAPS"));
+const chiraz = templateVars({ businessName: "CAFÉ DE CHIRAZ", city: "PARIS" }, s);
+const body60 = "Bonjour, " + "je vous écris au sujet de votre site et de vos clients en ligne. ".repeat(6) + "Cela vous intéresse ?";
+check("caps: a business name in capitals through {{business}} is fine", caps(validateDraft("Une idée pour CAFÉ DE CHIRAZ à PARIS", body60, "fr", "", capsAllowed(chiraz))), []);
+check("caps: capitals in my own template text are still refused", caps(validateDraft("Une idée GRATUITE pour vous", body60, "fr", "", capsAllowed(chiraz))).length, 1);
 check("fill: the template's own French space before ! stays after an empty value", [fillTemplate("Bonjour {{contact}} !", vars()), fillTemplate("Bonjour {{contact}} !", vars())], ["Bonjour !", "Bonjour !"]);
 check("fill: French spaces before ? and : are kept", fillTemplate("Cela vous intéresse ?\nde tout : le design", vars()), "Cela vous intéresse ?\nde tout : le design");
 

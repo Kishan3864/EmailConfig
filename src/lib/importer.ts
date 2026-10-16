@@ -6,6 +6,8 @@ import { getAllChunked } from "./ledger";
 export type InRow = {
   email?: string; businessName?: string; website?: string; phone?: string; country?: string; chain?: string; raw?: string;
   contactName?: string; city?: string; category?: string; about?: string; note?: string;
+  // for templates: {{reviews}} {{rating}} {{observation}}; subject + body = a mail written for this lead (both needed)
+  reviews?: string; rating?: string; observation?: string; subject?: string; body?: string;
 };
 export type OutRow = InRow & { rowNo: number; outcome: "send" | "skip" | "review"; reason?: string; businessKey?: string };
 

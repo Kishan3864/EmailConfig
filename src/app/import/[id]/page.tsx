@@ -40,14 +40,45 @@ function wajah(reason: string, t: T) {
   return r ? t(r.hi, r.en) : reason;
 }
 
+/** "4.8 ★ · 312 reviews": the Google rating and review count as the file gives them (a bare number gets its star / word). */
+function googleLine(rating: string | null | undefined, reviews: string | null | undefined, t: T) {
+  const r = (rating || "").trim(), n = (reviews || "").trim();
+  return [
+    r && (/^\d+(?:[.,]\d+)?$/.test(r) ? `${r} ★` : r),
+    n && (/^\d[\d\s.,]*$/.test(n) ? t(`${n} reviews`, `${n} reviews`) : n),
+  ].filter(Boolean).join(" · ");
+}
+
 /**
- * Business cell: the name, then the facts from the file in small type (contact · city · type, then what they do and the
- * true fact, cut to one line; the full text is in the tooltip). Besides their own website title / description, these are
- * the only facts the AI may use about the business.
+ * Cheap copies of a few draft rules (lib/validate.ts) for the lead's own mail, so a text that would never become a draft
+ * shows up here already. Placeholders in it can change the word count a little; the full check runs when the draft is made.
+ */
+function ownProblems(subject: string, body: string, t: T) {
+  const words = body.trim().split(/\s+/).filter(Boolean).length;
+  return [
+    (words < 60 || words > 110) && t(`${words} shabd (60-110 chahiye)`, `${words} words (60-110 needed)`),
+    !body.includes("?") && t("koi sawaal (?) nahi", "no question (?)"),
+    /https?:\/\/|www\./i.test(`${subject} ${body}`) && t("link hai (mana hai)", "has a link (not allowed)"),
+    subject.length > 90 && t("subject 90 characters se lamba", "subject longer than 90 characters"),
+  ].filter((x): x is string => !!x);
+}
+
+/** Anything to show in the business cell besides the business name. */
+const hasDetails = (r: ImportRow) =>
+  !!(r.businessName || r.contactName || r.city || r.category || r.about || r.note || r.reviews || r.rating || r.observation || r.customSubject || r.customBody);
+
+/**
+ * Business cell: the name, then the facts from the file in small type (contact · city · type, the Google rating, then what
+ * they do, the true fact and the observation, cut to one line; the full text is in the tooltip), and the lead's own mail
+ * when the file gave one. Besides their own website title / description, contact to true fact are the only facts the AI may
+ * use about the business; rating, reviews and observation only go into templates.
  */
 function Details({ r, t }: { r: ImportRow; t: T }) {
   const meta = ([[r.contactName, t("Contact ka naam", "Contact name")], [r.city, t("Shehar", "City")], [r.category, t("Business ka type", "Type of business")]] as const)
     .filter(([v]) => v);
+  const google = googleLine(r.rating, r.reviews, t);
+  const subject = (r.customSubject || "").trim(), body = (r.customBody || "").trim();
+  const problems = subject && body ? ownProblems(subject, body, t) : [];
   // one line each, at most 280px; on the phone cards they stay right-aligned like the other values
   const small = "max-w-[280px] truncate text-xs max-md:ml-auto";
   const line = (label: string, v?: string | null) => v && (
@@ -61,8 +92,28 @@ function Details({ r, t }: { r: ImportRow; t: T }) {
           {meta.map(([v], i) => <span key={i}>{i > 0 && <span className="text-slate-300"> · </span>}{v}</span>)}
         </div>
       )}
+      {google && <div className={`${small} text-slate-500`} title={`Google: ${google}`}>Google: {google}</div>}
       {line(t("Kya karta hai", "What they do"), r.about)}
       {line(t("Sach baat", "True fact"), r.note)}
+      {line(t("Observation", "Observation"), r.observation)}
+      {subject && body ? (
+        <>
+          <div className={`${small} text-slate-400`} title={`${subject}\n\n${body}`}>
+            <span className="text-slate-500">{t("Apna mail", "Own mail")}:</span> {subject}
+          </div>
+          {problems.length > 0 && (
+            <div className={`${small} text-amber-700`} title={problems.join("\n")}>
+              {t("Rules pe nahi:", "Breaks the rules:")} {problems.join(" · ")}
+            </div>
+          )}
+        </>
+      ) : (subject || body) && (
+        <div className={`${small} text-amber-700`} title={subject || body}>
+          {subject
+            ? t("Sirf apna subject hai, text nahi: dono chahiye, isliye use nahi hoga", "Only an own subject, no text: both are needed, so it is not used")
+            : t("Sirf apna text hai, subject nahi: dono chahiye, isliye use nahi hoga", "Only an own text, no subject: both are needed, so it is not used")}
+        </div>
+      )}
     </div>
   );
 }
@@ -129,7 +180,7 @@ export default async function ImportPreview({ params, searchParams }: { params: 
     },
     {
       f: "review", label: t("Review chahiye", "Needs review"), short: "Review", value: review, tone: "amber", icon: "eye", dot: "bg-amber-500",
-      sub: done ? t("Review status mein add hue", "Added as 'Needs review'") : t("Aapke approval ke baad hi mail", "Mailed only after you approve"),
+      sub: done ? t("Review status mein add hue", "Added as 'Needs review'") : t("Pehle aap khud contact dekhoge", "You check the contact yourself first"),
       info: t(
         "Ye kisi insaan ka personal address lagta hai (jaise naam.surname@ ya gmail). Confirm par ye 'Review chahiye' status mein add hote hain; Contacts mein khud dekh ke approve ya reject karo.",
         "These look like a person's private address (like name.surname@ or gmail). On confirm they are added with the 'Needs review' status; check them yourself in Contacts and approve or reject them.",
@@ -205,8 +256,8 @@ export default async function ImportPreview({ params, searchParams }: { params: 
           ) : send > 0 ? (
             <NextStep href="/campaigns" cta={t("Campaigns kholo", "Open Campaigns")}
               text={t(
-                <>Import ke waqt {plural(send, "lead", "leads")} Ready {send === 1 ? "bana tha" : "bane the"}. Agar is list se abhi tak campaign nahi banaya, to Campaigns page pe banao: pehle 5 sample mails banti hain, unhe approve karte hi campaign shuru hota hai.</>,
-                <>At import time, {plural(send, "lead was", "leads were")} made Ready. If you have not created a campaign from this list yet, create one on the Campaigns page: 5 sample mails are made first, and the campaign starts as soon as you approve them.</>,
+                <>Import ke waqt {plural(send, "lead", "leads")} Ready {send === 1 ? "bana tha" : "bane the"}. Agar is list se abhi tak campaign nahi banaya, to Campaigns page pe banao aur start karo: worker har Ready lead ki draft banata hai, aap Approve page pe har mail padh ke khud approve karte ho, aur sirf approve ki hui mail hi jaati hai.</>,
+                <>At import time, {plural(send, "lead was", "leads were")} made Ready. If you have not created a campaign from this list yet, create and start one on the Campaigns page: the worker makes a draft for every Ready lead, you read and approve each mail yourself on the Approve page, and only approved mails go out.</>,
               )} />
           ) : (
             <NextStep tone="amber" href="/import" cta={t("Nayi list import karo", "Import a new list")}
@@ -237,11 +288,11 @@ export default async function ImportPreview({ params, searchParams }: { params: 
               "Every row of the file and its import result. Ready = added with the Ready status, Review = added as 'Needs review', Skip = not added.\nFilter with the tabs. At most 1000 rows are shown at a time.",
             )
             : t(
-              "File ki har row aur uska result. Bhejenge = add hoke campaign mein jayega, Review = aapke approval ke baad, Skip = add nahi hoga.\nTabs se filter karo. Ek baar mein max 1000 rows dikhti hain.",
-              "Every row of the file and its result. Will send = added and goes into a campaign, Review = only after your approval, Skip = not added.\nFilter with the tabs. At most 1000 rows are shown at a time.",
+              "File ki har row aur uska result. Bhejenge = add hoke campaign mein jayega, Review = pehle aap contact khud dekhoge, Skip = add nahi hoga.\nTabs se filter karo. Ek baar mein max 1000 rows dikhti hain.",
+              "Every row of the file and its result. Will send = added and goes into a campaign, Review = you check the contact yourself first, Skip = not added.\nFilter with the tabs. At most 1000 rows are shown at a time.",
             )) + t(
-            "\nBusiness ke neeche file se aayi baatein dikhti hain: contact, shehar, type, kya karta hai aur sach baat. AI business ke baare mein sirf yahi (aur unki website ka apna title/description) use karta hai.",
-            "\nUnder the business name you see the facts from the file: contact, city, type, what they do and the true fact. About the business, the AI uses only these (and their website's own title and description).",
+            "\nBusiness ke neeche file se aayi baatein dikhti hain: contact, shehar, type, kya karta hai aur sach baat. AI business ke baare mein sirf yahi (aur unki website ka apna title/description) use karta hai.\nGoogle rating / reviews aur observation sirf templates mein jaate hain. 'Apna mail' = file ka apna subject + text: us lead ko template ya AI ki jagah wahi jaata hai; peeli line ho to wo rules pe nahi hai aur uska draft nahi banega.",
+            "\nUnder the business name you see the facts from the file: contact, city, type, what they do and the true fact. About the business, the AI uses only these (and their website's own title and description).\nThe Google rating / reviews and the observation only go into templates. 'Own mail' = the file's own subject + text: that lead gets it instead of a template or the AI; an amber line means it breaks a rule and no draft will be made from it.",
           )}
           actions={<div className="max-sm:hidden">{tabBar}</div>}>
           {/* phones: the tabs get a row of their own; next to the title they squeeze it to one word per line */}
@@ -258,7 +309,7 @@ export default async function ImportPreview({ params, searchParams }: { params: 
                       <td data-label={t("Wajah", "Reason")} className="text-xs text-slate-500" title={r.reason || undefined}>{r.reason ? wajah(r.reason, t) : r.outcome === "send" ? t("Saare checks pass", "Passed all checks") : null}</td>
                       {/* only the stacked phone cards may break an address anywhere; in the desktop table it would squeeze the column */}
                       <td data-label="Email" className="font-medium text-slate-900 max-md:[overflow-wrap:anywhere]">{r.email}</td>
-                      <td data-label="Business">{(r.businessName || r.contactName || r.city || r.category || r.about || r.note) && <Details r={r} t={t} />}</td>
+                      <td data-label="Business">{hasDetails(r) && <Details r={r} t={t} />}</td>
                       <td data-label="Website">{r.website && <span className="block min-w-0 max-w-[220px] truncate" title={r.website}>{r.website}</span>}</td>
                       <td data-label={t("Desh", "Country")}>{r.country}</td>
                     </tr>

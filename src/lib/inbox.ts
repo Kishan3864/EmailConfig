@@ -6,6 +6,7 @@ import { imapClient, notify } from "./mailer";
 import { checkBounceThresholds } from "./guard";
 import { detectLang } from "./lang";
 import { translateToEnglish } from "./ai";
+import { withdrawDraft } from "./approval";
 import { FREEMAIL, emailDomain } from "./importer";
 import { log, event } from "./log";
 
@@ -109,6 +110,7 @@ async function handle(p: ParsedMail) {
   if (OPTOUT.test(fresh.slice(0, 600)) || OPTOUT.test(subject)) {
     await addReply(messageId, { leadId: lead.id, kind: "optout", fromEmail: from, subject, body: fresh.slice(0, 5000), bodyEn, receivedAt });
     await setLead(lead.id, { status: "opted_out" });
+    await withdrawDraft(lead.id, "opted out");
     await suppress(from, "opt-out reply");
     if (from !== lead.email) await suppress(lead.email, "opt-out reply");
     await event(lead.id, "opted_out", fresh.slice(0, 200));
@@ -119,6 +121,8 @@ async function handle(p: ParsedMail) {
   // ---------- real replies ----------
   await addReply(messageId, { leadId: lead.id, kind: "reply", fromEmail: from, subject, body: fresh.slice(0, 20000), bodyEn, receivedAt });
   if (!["bounced", "opted_out"].includes(lead.status)) await setLead(lead.id, { status: "replied" });
+  // they wrote to me: no cold mail of theirs may still go out
+  await withdrawDraft(lead.id, "replied");
   await event(lead.id, "replied", subject);
   await log("info", "inbox", `reply from ${from}`);
   await notify(`Reply from ${lead.businessName || from}`, `${from} replied:\n\n${fresh.slice(0, 1500)}${bodyEn ? `\n\n--- English ---\n${bodyEn}` : ""}`);

@@ -41,15 +41,15 @@ export const NAV: { title: Text; items: NavItem[] }[] = [
       {
         href: "/campaigns", icon: "megaphone", label: { hi: "Campaigns", en: "Campaigns" }, short: { hi: "Campaigns", en: "Campaigns" },
         info: {
-          hi: "Import ki hui list se campaign banao. Pehle 5 sample mails banti hain; unhe padh ke approve karo, tabhi campaign start hota hai.",
-          en: "Create a campaign from an imported list. First 5 sample mails are written; read and approve them, and only then does the campaign start.",
+          hi: "Import ki hui list se campaign banao aur start karo. Start se koi mail approve nahi hoti: uske baad worker har Ready lead ka draft banata hai. 5 sample drafts sirf ek optional preview hain.",
+          en: "Create a campaign from an imported list and start it. Starting approves nothing: the worker then makes a draft for every Ready lead. The 5 sample drafts are only an optional preview.",
         },
       },
       {
         href: "/review", icon: "check-check", label: { hi: "Approve Karo", en: "Approve mails" }, short: { hi: "Approve", en: "Approve" },
         info: {
-          hi: "AI ki likhi mails yahan aapke approval ke liye rukti hain (jab Settings mein 'Har mail approve karke hi bhejo' on ho). Padho, edit karo ya reject karo; sirf approve ki hui mail hi bheji jaati hai.",
-          en: "Mails written by the AI wait here for your approval (when 'Approve every mail before sending' is on in Settings). Read, edit or reject them; only approved mails are sent.",
+          hi: "Har draft (AI, template ya lead ka apna text) yahan aapke khud ke Approve ka wait karta hai. Padho, edit karo, reject ya approve karo; approve ki hui mails safety limits ke andar apne aap jaati hain.",
+          en: "Every draft (AI, template or the lead's own text) waits here for your own Approve. Read, edit, reject or approve it; approved mails go out by themselves within the safety limits.",
         },
       },
       {

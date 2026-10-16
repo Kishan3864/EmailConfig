@@ -25,6 +25,7 @@ const BADGE_TONE: Record<Tone, string> = {
 const STATUS: Record<string, [string, string, Tone]> = {
   ready: ["Ready", "Ready", "sky"],
   needs_review: ["Review chahiye", "Needs review", "amber"],
+  needs_text: ["Text chahiye", "Needs your text", "amber"],
   rejected: ["Reject kiya", "Rejected", "slate"],
   sent: ["Sent", "Sent", "emerald"],
   replied: ["Reply aaya", "Replied", "violet"],

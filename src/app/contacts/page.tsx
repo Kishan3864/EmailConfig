@@ -51,8 +51,8 @@ export default async function Contacts({ searchParams }: { searchParams: Promise
   // where to go after this page
   const next: { text: string; href?: string; cta?: string; tone?: "indigo" | "emerald" | "amber" } | null = !n ? null
     : status === "needs_review" ? {
-      text: t("Har contact ko Approve ya Reject karo. Approve kiye contacts ki mail AI likhega, aur wo mail Approve page pe aapka intezaar karegi.",
-        "Approve or reject each contact. The AI writes a mail for every approved contact, and that mail waits for you on the Approve page."),
+      text: t("Har contact ko Approve ya Reject karo. Campaign start hone ke baad har approve kiye contact ki mail banti hai (AI, template ya aapke CSV text se), aur wo Approve page pe aapka intezaar karti hai.",
+        "Approve or reject each contact. Once the campaign is started, a mail is made for every approved contact (by the AI, from a template or from your own CSV text), and it waits for you on the Approve page."),
       href: "/review", cta: t("Approve page kholo", "Open Approve page") }
     : status === "check_manual" ? {
       text: t("Har contact kholo, mailbox ka Sent folder dekho aur mark karo ki mail gayi thi ya nahi.",
@@ -73,8 +73,8 @@ export default async function Contacts({ searchParams }: { searchParams: Promise
       text: t("Ready contacts ko mail bhejne ke liye unki list se campaign banao.", "To mail the Ready contacts, create a campaign from their list."),
       href: "/campaigns", cta: t("Campaigns kholo", "Open campaigns") }
     : readyCamps.length ? {
-      text: t("Ye Ready contacts campaign mein hain. Campaign chalne pe AI inki mails likhega, phir wo Approve page pe aayengi. Campaign chal raha hai ya nahi, wahan dekho.",
-        "These Ready contacts are in a campaign. While it runs, the AI writes their mails, and then they appear on the Approve page. Check whether the campaign is running."),
+      text: t("Ye Ready contacts campaign mein hain. Campaign start hone ke baad inki mails banti hain (AI, template ya aapke CSV text se) aur Approve page pe aapka intezaar karti hain. Campaign start hua hai aur chal raha hai ya nahi, wahan dekho.",
+        "These Ready contacts are in a campaign. Once it is started, their mails are made (by the AI, from a template or from your own CSV text) and wait for you on the Approve page. Check there whether the campaign is started and running."),
       href: oneCamp ? `/campaigns/${oneCamp}` : "/campaigns", cta: oneCamp ? t("Campaign kholo", "Open campaign") : t("Campaigns kholo", "Open campaigns") }
     : {
       text: t("In contacts ko ab koi mail nahi jayegi. Kya hua tha, ye dekhne ke liye kisi bhi email pe click karo.",
@@ -92,7 +92,8 @@ export default async function Contacts({ searchParams }: { searchParams: Promise
       href: "/import", cta: t("Leads import karo", "Import leads") }
     : status === "needs_review" && !q ? {
       icon: "check-check", title: t("Koi contact review ke liye nahi ruka", "No contacts waiting for review"),
-      text: t("Sab contacts check ho chuke hain. Ab Approve page pe AI ki likhi mails padho.", "All contacts have been checked. Now read the AI-written mails on the Approve page."),
+      text: t("Sab contacts check ho chuke hain. Campaign start hone ke baad inki mails (AI, template ya aapke CSV text se) Approve page pe aapka intezaar karti hain.",
+        "All contacts have been checked. Once the campaign is started, their mails (by the AI, from a template or from your own CSV text) wait for you on the Approve page."),
       href: "/review", cta: t("Approve page kholo", "Open Approve page") }
     : status === "check_manual" && !q ? {
       icon: "check-circle", title: t("Koi manual check baaki nahi", "No manual checks left"),

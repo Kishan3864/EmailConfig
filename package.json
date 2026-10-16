@@ -11,7 +11,9 @@
     "migrate:settings": "tsx scripts/migrate-settings.ts",
     "deploy:indexes": "firebase deploy --only firestore:indexes",
     "test:ledger": "tsx scripts/test-ledger.ts",
-    "test:templates": "tsx scripts/test-templates.ts"
+    "test:templates": "tsx scripts/test-templates.ts",
+    "test:pipeline": "tsx scripts/test-pipeline.ts",
+    "backup": "tsx scripts/backup-firestore.ts"
   },
   "dependencies": {
     "cheerio": "^1.1.2",

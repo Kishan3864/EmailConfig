@@ -17,6 +17,9 @@ const FIELDS: [Key, HiEn][] = [
   ["email", { hi: "Email *", en: "Email *" }], ["businessName", { hi: "Business ka naam", en: "Business name" }], ["contactName", { hi: "Contact ka naam", en: "Contact name" }],
   ["website", { hi: "Website", en: "Website" }], ["city", { hi: "Shehar", en: "City" }], ["country", { hi: "Desh", en: "Country" }],
   ["category", { hi: "Business ka type", en: "Type of business" }], ["about", { hi: "Business kya karta hai", en: "What they do" }], ["note", { hi: "Ek sach baat", en: "One true fact" }],
+  ["reviews", { hi: "Google reviews", en: "Google reviews" }], ["rating", { hi: "Rating", en: "Rating" }],
+  ["observation", { hi: "Observation (website ki ek problem)", en: "Observation (one problem on their website)" }],
+  ["subject", { hi: "Apna subject", en: "Own subject" }], ["body", { hi: "Apna mail text", en: "Own mail text" }],
   ["phone", { hi: "Phone", en: "Phone" }], ["chain", { hi: "Chain hai?", en: "Chain flag" }],
 ];
 const LABEL = Object.fromEntries(FIELDS) as Record<Key, HiEn>;
@@ -33,20 +36,33 @@ const GUESS: Record<Key, RegExp[]> = {
   category: [/[ck]ategor|type|industry|niche|sector|secteur|activite|branche|rubro/],
   about: [/about|descri|services|products|what(?!s?app)|activity/],
   note: [/note|remark|comment|fact/],
+  reviews: [/review|avis|bewertung|resena|recension/],
+  // French "Note" alone is usually a remark: only "Note /5" or "Note sur 5" is a rating ("start" is not a star)
+  rating: [/rating|\bstars?\b|etoiles?|score|^note ?(\/|sur) ?5$/],
+  observation: [/observ|problem|issue|probleme|audit/],
+  subject: [/^subject$|^objet$|^sujet$|subject|objet du mail/],
+  body: [/^body$|mail[ _-]?(body|text)|message|corps|^texte?$/],
   phone: [/phone|(?:^|[^a-z])tel|mobile/],
   chain: [/chain|chaine|franchise/],
 };
-// headers a field must never take, even when its pattern matches ("Contact email" is not a name, "Business type" is not the business)
+// headers a field must never take, even when its pattern matches ("Contact email" is not a name, "Business type" is not the business,
+// "Mail subject" is not the address, "Website issue" is not the website, a "Messenger" link is not a mail text)
 const NOT: Partial<Record<Key, RegExp>> = {
+  email: /subject|objet|sujet|body|text|message|corps/,
   businessName: /mail|phone|web|site|url|type|[ck]ategor|descri|about|(?:last|full)[ _-]?name|surname|nachname|apellido|famille/,
-  contactName: /mail|phone|(?:^|[^a-z])tel|web|site|url|contacted|business|company|entreprise|societe|firma|empresa|negocio|last[ _-]?name|surname|nachname|apellido|famille/,
-  website: /descri|title|about/,
+  contactName: /mail|phone|(?:^|[^a-z])tel|web|site|url|contacted|business|company|entreprise|societe|firma|empresa|negocio|last[ _-]?name|surname|nachname|apellido|famille|message|subject/,
+  website: /descri|title|about|observ|problem|issue|audit/,
   country: /landline/,
+  reviews: /link|url|[ _-]id$|per[ _-]|tags/, // Google Maps exports: reviews_link, reviews_id, reviews_per_score
+  body: /messenger|whatsapp|date/,
 };
-// guessing order: specific fields first, so "Contact name" goes to the contact and "Business type" to the type, not to the business name
-const ORDER: Key[] = ["email", "website", "contactName", "category", "about", "note", "city", "country", "phone", "businessName", "chain"];
+// guessing order: specific fields first, so "Contact name" goes to the contact and "Business type" to the type, not to the business name;
+// observation, subject and body before website and contact ("Website issue", "Contact message"), rating before note ("Note /5")
+const ORDER: Key[] = ["email", "observation", "subject", "body", "website", "contactName", "category", "about", "reviews", "rating", "note", "city", "country", "phone", "businessName", "chain"];
 // fields that hold words: they never take a column of numbers or yes/no flags
-const TEXT: Key[] = ["businessName", "contactName", "city", "country", "category", "about", "note"];
+const TEXT: Key[] = ["businessName", "contactName", "city", "country", "category", "about", "note", "observation", "subject", "body"];
+// fields that hold a number (312, 4.8, 4,8/5): they never take a column without digits, like a column of written reviews
+const NUM: Key[] = ["reviews", "rating"];
 const plain = (h: unknown) => String(h ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 
 /**
@@ -58,7 +74,9 @@ function guessColumns(headers: string[], rows: string[][]) {
   const most = (i: number, re: RegExp) => { const v = vals(i); return v.length > 0 && v.filter((x) => re.test(x)).length * 2 > v.length; };
   const emails = (i: number) => most(i, /@/);
   const junk = (i: number) => most(i, /^(?:[\d\s.,:;\/+()%#*★-]+|yes|no|y|n|true|false|oui|non|ja|nein|si|x)$/i);
-  const fits = (f: Key, i: number) => (f === "email" ? !vals(i).length || emails(i) : !emails(i) && !(TEXT.includes(f) && junk(i)));
+  const numbers = (i: number) => !vals(i).length || most(i, /\d/);
+  const fits = (f: Key, i: number) =>
+    f === "email" ? !vals(i).length || emails(i) : !emails(i) && !(TEXT.includes(f) && junk(i)) && !(NUM.includes(f) && !numbers(i));
   const m: Partial<Record<Key, number>> = {};
   const free = (i: number) => !Object.values(m).includes(i);
   for (const tier of [0, 1]) {
@@ -81,20 +99,47 @@ const CSV_COLS: { col: string; req?: true; what: HiEn }[] = [
   { col: "email", req: true, what: { hi: "Jis address pe mail jayegi. Ek cell mein kai hon to app sabse achha khud chunta hai.", en: "The address the mail goes to. If a cell has several, the app picks the best one itself." } },
   { col: "business_name", what: { hi: "Business ka naam. Mail mein aur template ke {{business}} mein aata hai.", en: "The business name. Used in the mail and in the template's {{business}}." } },
   { col: "contact_name", what: { hi: "Owner ya manager ka pehla naam. Greeting mein (Hello Marco) aur {{contact}} mein.", en: "First name of the owner or manager. Used in the greeting (Hello Marco) and in {{contact}}." } },
-  { col: "website", what: { hi: "Ek business ko ek hi mail jaye. AI isse sirf samajhta hai ki business kya karta hai, website pe kabhi comment nahi karta.", en: "Makes sure a business gets only one mail. The AI only uses it to understand what they do and never comments on the website." } },
+  {
+    col: "website",
+    what: {
+      hi: "Ek business ko ek hi mail jaye. Isse template ka group bhi tay hota hai: khaali, ya sirf Facebook / Instagram / Google Maps / booking page ya wixsite.com jaisa free page = 'Bina website', apna domain = 'Website hai'. AI isse sirf samajhta hai ki business kya karta hai, website pe kabhi comment nahi karta.",
+      en: "Makes sure a business gets only one mail. It also picks the template group: empty, or only a Facebook / Instagram / Google Maps / booking page or a free page like wixsite.com = 'No website', a domain of their own = 'Has a website'. The AI only uses it to understand what they do and never comments on the website.",
+    },
+  },
   { col: "city", what: { hi: "Shehar. Mail mein aur {{city}} mein.", en: "The city. Used in the mail and in {{city}}." } },
   { col: "country", what: { hi: "Desh. Isse campaign ki bhasha aur time zone ka suggestion milta hai; {{country}} mein bhi.", en: "The country. Suggests the campaign language and time zone; also {{country}}." } },
   { col: "category", what: { hi: "Business ka type. Mail unke kaam ke hisaab se banti hai; {{category}} mein bhi.", en: "The type of business. Makes the mail fit their trade; also {{category}}." } },
   { col: "about", what: { hi: "Business kya karta hai, aapke shabdon mein: services ya products.", en: "What they do, in your words: services or products." } },
   { col: "note", what: { hi: "Ek sach baat jo aapne khud dekhi. AI ise ek baar, chhota sa use kar sakta hai.", en: "One true fact you checked yourself. The AI may mention it once, briefly." } },
+  { col: "reviews", what: { hi: "Google pe kitne reviews hain, sirf number. Templates ke {{reviews}} mein aata hai; AI ise use nahi karta.", en: "How many Google reviews they have, just the number. Fills {{reviews}} in templates; the AI does not use it." } },
+  { col: "rating", what: { hi: "Google rating, jaise 4.8. Templates ke {{rating}} mein aata hai; AI ise use nahi karta.", en: "The Google rating, like 4.8. Fills {{rating}} in templates; the AI does not use it." } },
+  {
+    col: "observation",
+    what: {
+      hi: "Unki website ki ek asli problem jo aapne khud dekhi, mail ki bhasha mein aur template ke sentence mein fit ho aise. {{observation}} mein aata hai. App ise kabhi khud nahi banata: template ko chahiye aur cell khaali hai, to draft 'Text chahiye' mein rukti hai jab tak aap wo hissa khud na likho.",
+      en: "One real problem you saw on their website yourself, in the mail's language and worded to fit your template's sentence. Fills {{observation}}. The app never invents it: if the template needs it and the cell is empty, the draft waits as 'Text chahiye' (needs text) until you write that part yourself.",
+    },
+  },
+  { col: "subject", what: { hi: "Is lead ke liye aapka apna subject. Sirf 'body' ke saath kaam karta hai.", en: "Your own subject for this lead. Works only together with 'body'." } },
+  {
+    col: "body",
+    what: {
+      hi: "Is lead ke liye aapka apna mail text. 'subject' aur 'body' dono hon to is lead ko template ya AI ki jagah bilkul yahi text jaata hai, wahi rules ke saath (60-110 shabd, sawaal (?), koi link nahi, campaign ki bhasha). Signature aur footer apne aap judte hain; approve phir bhi aap khud karoge.",
+      en: "Your own mail text for this lead. With both 'subject' and 'body', this lead gets exactly this text instead of a template or the AI, under the same rules (60-110 words, a question (?), no links, the campaign's language). The signature and footer are added automatically; you still approve it yourself.",
+    },
+  },
   { col: "phone", what: { hi: "Sirf aapke record ke liye. Mail mein use nahi hota.", en: "Only for your records. It is not used in the mail." } },
 ];
-// example rows of the sample CSV; .example addresses have no mail server, so an unchanged sample can never be mailed
+// example rows of the sample CSV, in the order of CSV_COLS; .example addresses have no mail server, so an unchanged sample can never be mailed.
+// The observation is in the mail's language (French leads, French text); the third row brings its own subject + body (60-110 words, a question).
+const OWN_BODY = "Hello,\n\nI came across Greenleaf Yoga while looking for yoga studios in Manchester, and your hot yoga and beginner classes stood out to me.\n\nI help small studios make their website easier to use on a phone, with a clear class timetable and online booking, so new students can find a class and sign up in a minute.\n\nIf that sounds useful, I would be happy to send you two or three ideas for your studio, with no obligation at all.\n\nWould you be open to a short reply with your thoughts?";
 const SAMPLE: string[][] = [
-  ["contact@trattoria-roma.example", "Trattoria Roma", "Marco", "trattoria-roma.example", "Lyon", "France", "Italian restaurant", "Fresh pasta, pizza and takeaway; private room for events", "4.8★ with 300 Google reviews", "+33 4 78 00 00 00"],
-  ["info@cabinet-sourire.example", "Cabinet Dentaire Sourire", "Claire", "cabinet-sourire.example", "Bordeaux", "France", "Dental clinic", "General dentistry, implants and teeth whitening", "Open on Saturdays", "+33 5 56 00 00 00"],
-  ["hello@greenleaf-yoga.example", "Greenleaf Yoga", "", "greenleaf-yoga.example", "Manchester", "United Kingdom", "Yoga studio", "Hot yoga and beginner classes, 7 days a week", "", "+44 161 000 0000"],
+  ["contact@trattoria-roma.example", "Trattoria Roma", "Marco", "trattoria-roma.example", "Lyon", "France", "Italian restaurant", "Fresh pasta, pizza and takeaway; private room for events", "Family-run since 1985", "312", "4.8", "votre menu n'existe qu'en PDF, difficile à lire sur un téléphone", "", "", "+33 4 78 00 00 00"],
+  ["info@cabinet-sourire.example", "Cabinet Dentaire Sourire", "Claire", "cabinet-sourire.example", "Bordeaux", "France", "Dental clinic", "General dentistry, implants and teeth whitening", "Open on Saturdays", "87", "4.6", "", "", "", "+33 5 56 00 00 00"],
+  ["hello@greenleaf-yoga.example", "Greenleaf Yoga", "", "greenleaf-yoga.example", "Manchester", "United Kingdom", "Yoga studio", "Hot yoga and beginner classes, 7 days a week", "", "45", "4.9", "", "A question about Greenleaf Yoga", OWN_BODY, "+44 161 000 0000"],
 ];
+/** The example shown next to a column in "CSV mein kya do": the first sample row that has one. */
+const sampleOf = (i: number) => SAMPLE.find((r) => r[i])?.[i] || "";
 
 /** Builds the sample CSV in the browser (UTF-8 with BOM, so Excel shows ★ and accents) and downloads it. */
 function downloadSample() {
@@ -112,7 +157,10 @@ function downloadSample() {
 
 // "Ek lead add karo": one address, sent through the same preview as a file
 type OneKey = Exclude<Key, "phone" | "chain">;
-const ONE_EMPTY: Record<OneKey, string> = { email: "", businessName: "", contactName: "", website: "", city: "", country: "", category: "", note: "", about: "" };
+const ONE_EMPTY: Record<OneKey, string> = {
+  email: "", businessName: "", contactName: "", website: "", city: "", country: "", category: "", note: "", about: "",
+  reviews: "", rating: "", observation: "", subject: "", body: "",
+};
 const ONE_PLACEHOLDER: Record<OneKey, HiEn> = {
   email: { hi: "contact@business.fr", en: "contact@business.com" },
   businessName: { hi: "Jaise Trattoria Roma", en: "E.g. Trattoria Roma" },
@@ -121,9 +169,18 @@ const ONE_PLACEHOLDER: Record<OneKey, HiEn> = {
   city: { hi: "Jaise Lyon", en: "E.g. Lyon" },
   country: { hi: "Jaise France", en: "E.g. France" },
   category: { hi: "Jaise Italian restaurant", en: "E.g. Italian restaurant" },
-  note: { hi: "Jaise 4.8★ with 300 Google reviews", en: "E.g. 4.8★ with 300 Google reviews" },
+  note: { hi: "Jaise family-run since 1985", en: "E.g. family-run since 1985" },
   about: { hi: "Jaise fresh pasta, takeaway aur events ke liye catering", en: "E.g. fresh pasta, takeaway and catering for events" },
+  reviews: { hi: "Jaise 312", en: "E.g. 312" },
+  rating: { hi: "Jaise 4.8", en: "E.g. 4.8" },
+  observation: { hi: "Jaise votre menu n'existe qu'en PDF (mail ki bhasha mein)", en: "E.g. votre menu n'existe qu'en PDF (in the mail's language)" },
+  subject: { hi: "Khaali = template ya AI ka subject", en: "Empty = the template's or the AI's subject" },
+  body: { hi: "Khaali chhodo to mail template ya AI se banegi", en: "Leave empty to have the mail made from a template or by the AI" },
 };
+// the lead's own mail: used only when both are given
+const OWN: OneKey[] = ["subject", "body"];
+// fields of several words get a text box (rows); the numbers get a number keyboard on phones
+const AREA: Partial<Record<OneKey, number>> = { about: 2, observation: 2, body: 8 };
 
 const FIELD_INFO: Record<Key, HiEn> = {
   email: {
@@ -151,12 +208,32 @@ const FIELD_INFO: Record<Key, HiEn> = {
     en: "What the business does, in your words: services or products, like 'Fresh pasta, takeaway and catering'.\nAbout the business, the AI uses only the true facts you give (and their website's own title and description); it never guesses.",
   },
   note: {
-    hi: "Ek sach baat jo aapne khud dekhi ho, jaise '4.8★ with 300 Google reviews'. AI ise mail mein ek baar, chhota sa use kar sakta hai.\nSirf pakki baat likho: andaza ya tareef nahi.",
-    en: "One true fact you checked yourself, like '4.8★ with 300 Google reviews'. The AI may mention it once, briefly.\nWrite only what is certain: no guesses, no flattery.",
+    hi: "Ek sach baat jo aapne khud dekhi ho, jaise 'Family-run since 1985'. AI ise mail mein ek baar, chhota sa use kar sakta hai.\nSirf pakki baat likho: andaza ya tareef nahi. Google reviews aur rating ke apne alag fields hain.",
+    en: "One true fact you checked yourself, like 'Family-run since 1985'. The AI may mention it once, briefly.\nWrite only what is certain: no guesses, no flattery. Google reviews and rating have fields of their own.",
   },
   website: {
-    hi: "Business ki website. Iske domain se pata chalta hai ki ek business ko ek hi mail jaye. Block list bhi isi se check hoti hai.",
-    en: "The business website. Its domain makes sure one business gets only one mail. The Block list is checked against it too.",
+    hi: "Business ki website. Iske domain se pata chalta hai ki ek business ko ek hi mail jaye. Block list bhi isi se check hoti hai.\nIsse template ka group bhi tay hota hai: khaali, ya sirf Facebook / Instagram / Google Maps / booking page ya wixsite.com jaisa free page = 'Bina website'; apna domain = 'Website hai' (templates mein {{website}}).",
+    en: "The business website. Its domain makes sure one business gets only one mail. The Block list is checked against it too.\nIt also picks the template group: empty, or only a Facebook / Instagram / Google Maps / booking page or a free page like wixsite.com = 'No website'; a domain of their own = 'Has a website' ({{website}} in templates).",
+  },
+  reviews: {
+    hi: "Google pe kitne reviews hain, sirf number, jaise 312. Ye sirf templates ke {{reviews}} ke liye hai; AI ise use nahi karta.\nPata na ho to khaali chhodo: template mein {{reviews|...}} ka fallback text lagega.",
+    en: "How many Google reviews they have, just the number, like 312. It is only for {{reviews}} in templates; the AI does not use it.\nIf you don't know it, leave it empty: the template's {{reviews|...}} fallback text is used.",
+  },
+  rating: {
+    hi: "Google rating, jaise 4.8. Ye sirf templates ke {{rating}} ke liye hai; AI ise use nahi karta.\nPata na ho to khaali chhodo: template mein {{rating|...}} ka fallback text lagega.",
+    en: "The Google rating, like 4.8. It is only for {{rating}} in templates; the AI does not use it.\nIf you don't know it, leave it empty: the template's {{rating|...}} fallback text is used.",
+  },
+  observation: {
+    hi: "Unki website ki ek asli problem jo aapne khud dekhi, jaise 'votre menu n'existe qu'en PDF'. Mail ki bhasha mein likho, aise ki template ke sentence mein fit ho. Templates ke {{observation}} mein jaata hai.\nApp ise kabhi andaze se nahi bharta, fallback bhi nahi: template ko chahiye aur ye khaali hai, to draft 'Text chahiye' mein rukti hai jab tak aap wo hissa khud na likho.",
+    en: "One real problem you saw on their website yourself, like 'votre menu n'existe qu'en PDF'. Write it in the mail's language, worded to fit your template's sentence. It goes into {{observation}} in templates.\nThe app never guesses it and uses no fallback: if the template needs it and it is empty, the draft waits as 'Text chahiye' (needs text) until you write that part yourself.",
+  },
+  subject: {
+    hi: "Is lead ke liye aapka apna subject. Sirf 'Apna mail text' ke saath kaam karta hai: dono hon to is lead ko template ya AI ki jagah yahi mail jaati hai.",
+    en: "Your own subject for this lead. It works only together with 'Own mail text': with both, this lead gets this mail instead of a template or the AI.",
+  },
+  body: {
+    hi: "Is lead ke liye aapka apna mail text (signature aur footer apne aap judte hain). Sirf 'Apna subject' ke saath kaam karta hai.\nWahi rules lagte hain: 60-110 shabd, ek sawaal (?), koi link nahi, campaign ki bhasha. {{contact}} jaise placeholders bhi chalte hain. Approve phir bhi aap khud karoge.",
+    en: "Your own mail text for this lead (the signature and footer are added automatically). It works only together with 'Own subject'.\nThe same rules apply: 60-110 words, a question (?), no links, the campaign's language. Placeholders like {{contact}} work too. You still approve it yourself.",
   },
   phone: {
     hi: "Sirf record ke liye save hota hai. Mail mein use nahi hota.",
@@ -208,7 +285,7 @@ export default function ImportPage() {
   const [reads, setReads] = useState(0); // bumps after every successful read, to bring step 2 into view
   const [csvOpen, setCsvOpen] = useState(false); // phones: the column list of "CSV mein kya do" is folded until opened
   const [one, setOne] = useState(ONE_EMPTY);
-  const [oneErr, setOneErr] = useState<{ title: string; text?: string; at: "email" | "source" | "server" } | null>(null);
+  const [oneErr, setOneErr] = useState<{ title: string; text?: string; at: "email" | "source" | "own" | "server" } | null>(null);
   const sourceRef = useRef<HTMLInputElement>(null);
   const oneEmailRef = useRef<HTMLInputElement>(null);
   const oneSourceRef = useRef<HTMLInputElement>(null);
@@ -219,6 +296,8 @@ export default function ImportPage() {
   useEffect(() => { if (reads) document.getElementById("step2")?.scrollIntoView({ behavior: "smooth", block: "start" }); }, [reads]);
 
   const fail = (at: Problem["at"], title: string, text?: string) => { setErr({ at, title, text }); toast.error(title, text); };
+  // only one of the two own-mail columns is chosen: useless alone (the lead's own mail needs both)
+  const ownHalf = (map.subject === undefined) !== (map.body === undefined);
 
   // A new file or changed text makes the last read stale: step 2 goes away until 'File / text padho' is pressed again,
   // so a preview can never be built from the previous file's rows.
@@ -302,6 +381,10 @@ export default function ImportPage() {
         return fail("preview", t("Email wala column chuno", "Choose the email column"),
           t("'Email *' ke saamne wo column chuno jismein email address hain.", "Next to 'Email *', choose the column that holds the email addresses."));
       }
+      if (ownHalf) {
+        return fail("preview", t("Apna subject aur mail text: dono columns chuno", "Own subject and mail text: choose both columns"),
+          t("Lead ka apna mail tabhi use hota hai jab dono hon. Ye columns nahi hain to dono ko '— koi nahi —' rakho.", "A lead's own mail is used only when both are there. If the file has no such columns, set both to '— none —'."));
+      }
       rows = table.rows.map((r) => Object.fromEntries(FIELDS.filter(([f]) => map[f] !== undefined).map(([f]) => [f, r[map[f]!] ?? ""])) as Row);
     }
     if (!sourceNote.trim()) {
@@ -329,12 +412,16 @@ export default function ImportPage() {
 
   // "Ek lead add karo": the same /api/import/preview as a file, with one row; the preview page then shows its checks and the confirm
   async function addOne() {
-    const failOne = (at: "email" | "source" | "server", title: string, text?: string) => { setOneErr({ at, title, text }); toast.error(title, text); };
+    const failOne = (at: "email" | "source" | "own" | "server", title: string, text?: string) => { setOneErr({ at, title, text }); toast.error(title, text); };
     const row = Object.fromEntries(Object.entries(one).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v)) as Row;
     if (!row.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) {
       oneEmailRef.current?.focus();
       return failOne("email", row.email ? t("Ye email sahi nahi lagta", "This email does not look right") : t("Email daalo", "Enter the email address"),
         t("Jaise contact@business.fr. Sirf email zaroori hai, baaki jitna pata ho utna bharo.", "Like contact@business.com. Only the email is required; fill in whatever else you know."));
+    }
+    if (OWN.filter((k) => row[k]).length === 1) {
+      return failOne("own", t("Apna subject aur mail text dono do", "Give both your own subject and mail text"),
+        t("Lead ka apna mail tabhi use hota hai jab dono hon. Ya dono khaali chhodo: tab mail template ya AI se banegi.", "The lead's own mail is used only when both are there. Or leave both empty: the mail is then made from a template or by the AI."));
     }
     if (!sourceNote.trim()) {
       oneSourceRef.current?.focus();
@@ -359,18 +446,33 @@ export default function ImportPage() {
     }
   }
   const oneSet = (f: OneKey) => (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setOne((o) => ({ ...o, [f]: e.target.value }));
-  const oneField = (f: OneKey, className = "") => (
-    <Field key={f} className={className} label={LABEL[f][lang]} info={(ONE_INFO[f] || FIELD_INFO[f])[lang]}
-      hint={f === "email" && oneErr?.at === "email" ? <span className="text-red-600">{t("Sahi email address daalo", "Enter a valid email address")}</span> : undefined}>
-      {f === "about" ? (
-        <textarea className="input" rows={2} value={one.about} onChange={oneSet("about")} placeholder={ONE_PLACEHOLDER.about[lang]} />
-      ) : (
-        <input ref={f === "email" ? oneEmailRef : undefined} className={`input ${f === "email" && oneErr?.at === "email" ? "border-red-400 focus:border-red-500 focus:ring-red-500/10" : ""}`}
-          type={f === "email" ? "email" : "text"} inputMode={f === "email" ? "email" : undefined} autoComplete="off" spellCheck={f === "note" ? undefined : false}
-          value={one[f]} onChange={oneSet(f)} placeholder={ONE_PLACEHOLDER[f][lang]} />
-      )}
-    </Field>
-  );
+  const ownWords = one.body.trim().split(/\s+/).filter(Boolean).length;
+  const oneHint = (f: OneKey) => {
+    if (f === "email" && oneErr?.at === "email") return <span className="text-red-600">{t("Sahi email address daalo", "Enter a valid email address")}</span>;
+    if (OWN.includes(f) && oneErr?.at === "own" && !one[f].trim()) return <span className="text-red-600">{t("Dono chahiye: subject aur mail text", "Both are needed: subject and mail text")}</span>;
+    // the same word rule as every mail (lib/validate.ts); the server checks all rules when the draft is made
+    if (f === "body" && ownWords) {
+      const ok = ownWords >= 60 && ownWords <= 110;
+      return <span className={ok ? "text-emerald-700" : "text-amber-700"}>{t(`${ownWords} shabd (60-110 chahiye)`, `${ownWords} words (60-110 needed)`)}</span>;
+    }
+    return undefined;
+  };
+  const oneField = (f: OneKey, className = "") => {
+    const bad = (f === "email" && oneErr?.at === "email") || (OWN.includes(f) && oneErr?.at === "own" && !one[f].trim());
+    const cls = `input ${bad ? "border-red-400 focus:border-red-500 focus:ring-red-500/10" : ""}`;
+    return (
+      <Field key={f} className={className} label={LABEL[f][lang]} info={(ONE_INFO[f] || FIELD_INFO[f])[lang]} hint={oneHint(f)}>
+        {AREA[f] ? (
+          <textarea className={cls} rows={AREA[f]} value={one[f]} onChange={oneSet(f)} placeholder={ONE_PLACEHOLDER[f][lang]} />
+        ) : (
+          <input ref={f === "email" ? oneEmailRef : undefined} className={cls}
+            type={f === "email" ? "email" : "text"} inputMode={f === "email" ? "email" : f === "reviews" ? "numeric" : f === "rating" ? "decimal" : undefined}
+            autoComplete="off" spellCheck={f === "note" || f === "subject" ? undefined : false}
+            value={one[f]} onChange={oneSet(f)} placeholder={ONE_PLACEHOLDER[f][lang]} />
+        )}
+      </Field>
+    );
+  };
 
   const parsed = !!table || !!extracted;
   const ready = (table?.rows.length || extracted?.length || 0) > 0; // something was read that can be checked
@@ -539,14 +641,20 @@ export default function ImportPage() {
         {table && (
           <Section id="step2" className="scroll-mt-20" icon="sliders" title={t(`Columns match karo (${plural(table.rows.length, "row", "rows")})`, `Map columns (${plural(table.rows.length, "row", "rows")})`)}
             info={t(
-              "Batao file ka kaunsa column kya hai. App ne column ke naam dekh ke khud andaza lagaya hai; galat ho to badal do.\nSirf Email zaroori hai. Baaki column na hon to '— koi nahi —' rehne do.\nBusiness ka type, 'kya karta hai' aur 'ek sach baat' wale columns hon to zaroor match karo: inse mail sabse specific banti hai.",
-              "Tell the app what each column of the file is. It has guessed from the column names; change anything that is wrong.\nOnly Email is required. If the other columns are missing, leave them at '— none —'.\nIf the file has columns for the type of business, what they do or a true fact, do map them: they make the mail the most specific.",
+              "Batao file ka kaunsa column kya hai. App ne column ke naam dekh ke khud andaza lagaya hai; galat ho to badal do.\nSirf Email zaroori hai. Baaki column na hon to '— koi nahi —' rehne do.\nBusiness ka type, 'kya karta hai' aur 'ek sach baat' wale columns hon to zaroor match karo: inse AI ki mail sabse specific banti hai.\nGoogle reviews, rating aur observation sirf templates ke liye hain ({{reviews}} {{rating}} {{observation}}). 'Apna subject' + 'Apna mail text' dono hon to us lead ko template ya AI ki jagah wahi mail jaati hai.",
+              "Tell the app what each column of the file is. It has guessed from the column names; change anything that is wrong.\nOnly Email is required. If the other columns are missing, leave them at '— none —'.\nIf the file has columns for the type of business, what they do or a true fact, do map them: they make the AI's mail the most specific.\nGoogle reviews, rating and observation are only for templates ({{reviews}} {{rating}} {{observation}}). With both 'Own subject' and 'Own mail text', that lead gets this mail instead of a template or the AI.",
             )}
             sub={t("Har field ke saamne file ka sahi column chuno.", "For each field, choose the matching column of the file.")}>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {FIELDS.map(([f, label]) => (
-                <Field key={f} label={label[lang]} info={FIELD_INFO[f][lang]} hint={f === "email" && map.email === undefined ? <span className="text-red-600">{t("Ye zaroori hai", "This is required")}</span> : undefined}>
-                  <select className={`input ${f === "email" && needEmail ? "border-red-400" : ""}`} value={map[f] ?? ""} onChange={(e) => setMap({ ...map, [f]: e.target.value === "" ? undefined : Number(e.target.value) })}>
+                <Field key={f} label={label[lang]} info={FIELD_INFO[f][lang]}
+                  hint={f === "email" && map.email === undefined
+                    ? <span className="text-red-600">{t("Ye zaroori hai", "This is required")}</span>
+                    : (f === "subject" || f === "body") && ownHalf
+                      ? <span className={err?.at === "preview" ? "text-red-600" : "text-amber-700"}>{t("Dono chahiye: 'Apna subject' aur 'Apna mail text'", "Both are needed: 'Own subject' and 'Own mail text'")}</span>
+                      : undefined}>
+                  <select className={`input ${(f === "email" && needEmail) || (map[f] === undefined && ownHalf && err?.at === "preview" && (f === "subject" || f === "body")) ? "border-red-400" : ""}`}
+                    value={map[f] ?? ""} onChange={(e) => setMap({ ...map, [f]: e.target.value === "" ? undefined : Number(e.target.value) })}>
                     <option value="">{t("— koi nahi —", "— none —")}</option>
                     {table.headers.map((h, i) => <option key={i} value={i}>{h || `Column ${i + 1}`}</option>)}
                   </select>
@@ -689,8 +797,8 @@ export default function ImportPage() {
           actions={<div className="max-sm:hidden">{sampleBtn("")}</div>}>
           <Callout tone="info" title={t("Sabse achhi mail ke liye", "For the best mails")}>
             {t(
-              <><b>category</b> + <b>about</b> + <b>note</b> se mail sabse specific banti hai. AI sirf yahi sach baatein use karta hai aur kabhi website pe comment nahi karta.</>,
-              <><b>category</b> + <b>about</b> + <b>note</b> make the mail the most specific. The AI uses only these true facts and never comments on the website.</>,
+              <><b>category</b> + <b>about</b> + <b>note</b> se AI ki mail sabse specific banti hai. AI sirf yahi sach baatein use karta hai aur kabhi website pe comment nahi karta. Templates ke liye <b>reviews</b>, <b>rating</b> aur <b>observation</b> do; <b>observation</b> sirf wahi likho jo aapne khud dekha.</>,
+              <><b>category</b> + <b>about</b> + <b>note</b> make the AI&apos;s mail the most specific. The AI uses only these true facts and never comments on the website. For templates, give <b>reviews</b>, <b>rating</b> and <b>observation</b>; write an <b>observation</b> only for what you saw yourself.</>,
             )}
           </Callout>
           <div className="sm:hidden">{sampleBtn("mt-3 h-10 w-full")}</div>
@@ -711,7 +819,7 @@ export default function ImportPage() {
                       {c.req && <span className="rounded bg-red-50 px-1 text-2xs font-semibold text-red-600">{t("zaroori", "required")}</span>}
                     </span>
                     <span className="text-xs leading-relaxed text-slate-600">{c.what[lang]}</span>
-                    <span className="truncate text-xs text-slate-400" title={SAMPLE[0][i]}><span className="md:hidden">{t("Jaise", "E.g.")}: </span>{SAMPLE[0][i]}</span>
+                    <span className="truncate text-xs text-slate-400" title={sampleOf(i)}><span className="md:hidden">{t("Jaise", "E.g.")}: </span>{sampleOf(i)}</span>
                   </li>
                 ))}
               </ul>
@@ -727,8 +835,8 @@ export default function ImportPage() {
 
         <Section id="one-lead" icon="user" title={t("Ek lead add karo", "Add a single lead")}
           info={t(
-            "Sirf ek address hai? Yahan bharo. Ye file jaisa hi chalta hai: wahi checks (MX record, role address, Ledger, Block list), phir preview page pe aap confirm karte ho.\nJitna sach pata ho utna bharo, baaki khaali chhodo. AI business ke baare mein sirf yahi baatein (aur unki website ka apna title/description) use karta hai.",
-            "Only one address? Fill it in here. It works just like a file: the same checks (MX record, role address, Ledger, Block list), then you confirm on the preview page.\nFill in what you know for sure and leave the rest empty. About the business, the AI uses only these facts (and their website's own title and description).",
+            "Sirf ek address hai? Yahan bharo. Ye file jaisa hi chalta hai: wahi checks (MX record, role address, Ledger, Block list), phir preview page pe aap confirm karte ho.\nJitna sach pata ho utna bharo, baaki khaali chhodo. AI business ke baare mein sirf yahi baatein (aur unki website ka apna title/description) use karta hai.\nGoogle reviews, rating aur observation templates ke liye hain. Chaho to neeche is lead ke liye apna poora mail text bhi de sakte ho.",
+            "Only one address? Fill it in here. It works just like a file: the same checks (MX record, role address, Ledger, Block list), then you confirm on the preview page.\nFill in what you know for sure and leave the rest empty. About the business, the AI uses only these facts (and their website's own title and description).\nGoogle reviews, rating and observation are for templates. If you like, you can also give your own full mail text for this lead below.",
           )}
           sub={t("Wahi checks aur preview jo file ke liye, bas file ke bina.", "The same checks and preview as for a file, just without one.")}>
           <form noValidate onSubmit={(e) => { e.preventDefault(); addOne(); }}>
@@ -752,8 +860,28 @@ export default function ImportPage() {
               {oneField("country")}
               {oneField("category")}
               {oneField("note", "md:col-span-2 lg:col-span-1")}
+              {oneField("reviews")}
+              {oneField("rating")}
+              {oneField("observation", "md:col-span-2 lg:col-span-1")}
               {oneField("about", "md:col-span-2 lg:col-span-3")}
             </div>
+            {/* the lead's own mail: folded, most leads get a template or the AI */}
+            <details className="group mt-4 border-t border-slate-100 pt-4">
+              <summary className="inline-flex cursor-pointer select-none items-center gap-1.5 text-sm font-medium text-slate-700 transition hover:text-indigo-700">
+                <Icon name="chevron-right" size={14} className="shrink-0 text-slate-400 transition group-open:rotate-90" />
+                {t("Apna mail text do (optional)", "Give your own mail text (optional)")}
+              </summary>
+              <p className="hint">
+                {t(
+                  "Subject aur text dono do to is lead ko template ya AI ki jagah bilkul yahi mail jaati hai, wahi rules ke saath. Approve phir bhi aap khud karoge.",
+                  "Give both a subject and a text and this lead gets exactly this mail instead of a template or the AI, under the same rules. You still approve it yourself.",
+                )}
+              </p>
+              <div className="mt-3 grid gap-3">
+                {oneField("subject")}
+                {oneField("body")}
+              </div>
+            </details>
             {oneErr && <div className="mt-4"><Callout tone="danger" title={oneErr.title}>{oneErr.text}</Callout></div>}
             <div className="mt-5 flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
               <p className="flex items-start gap-1.5 text-xs text-slate-500">

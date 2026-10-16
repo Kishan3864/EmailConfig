@@ -14,8 +14,11 @@ export async function generateMetadata() {
   return { title: t("Kaise use karein", "How to use") };
 }
 
-// The in-app guide: the flow from DRY-RUN to LIVE, every menu and button, what to put in the CSV, AI vs template
-// (one for all, or two by website), the English check next to every mail, the safety rules and common fixes.
+// The in-app guide: the flow from DRY-RUN to LIVE, the way of a mail (Start approves nothing, the worker makes every
+// draft, a draft that lacks my words or breaks a rule waits as "Text chahiye", my own Approve of the text I saw is the
+// last step, approved mails go out by themselves), every menu and button, what to put in
+// the CSV, AI vs template (one for all, or 1-3 per website group used in turn), the English check next to every mail,
+// the safety rules and common fixes.
 // Menu names come from nav.ts, so they always read exactly like the sidebar.
 // <B> only draws a picture of a button: nothing on this page runs an action.
 
@@ -251,10 +254,12 @@ function Option({ icon, title, tag, points, when, className = "" }: { icon: Icon
   );
 }
 
-// the first row of the sample CSV on the Import page (.example addresses can never be mailed)
+// the first row of the sample CSV on the Import page (.example addresses can never be mailed); subject + body are empty
+// here, so this lead gets the template or the AI (the observation is in the mail's language: a French lead, French text)
 const CSV_EXAMPLE = {
   email: "contact@trattoria-roma.example", business_name: "Trattoria Roma", contact_name: "Marco", website: "trattoria-roma.example", city: "Lyon", country: "France",
-  category: "Italian restaurant", about: "Fresh pasta, pizza and takeaway; private room for events", note: "4.8★ with 300 Google reviews", phone: "+33 4 78 00 00 00",
+  category: "Italian restaurant", about: "Fresh pasta, pizza and takeaway; private room for events", note: "Family-run since 1985",
+  reviews: "312", rating: "4.8", observation: "votre menu n'existe qu'en PDF, difficile à lire sur un téléphone", subject: "", body: "", phone: "+33 4 78 00 00 00",
 };
 type CsvColumn = keyof typeof CSV_EXAMPLE;
 const csvCell = (v: string) => (/[",]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
@@ -264,8 +269,18 @@ const TPL = "Hello {{contact|there}},\nWe at {{my_business}} work with businesse
 const TPL_FULL = "Hello Marco,\nWe at Brighton Solution work with businesses like Trattoria Roma in Lyon.";
 const TPL_EMPTY = "Hello there,\nWe at Brighton Solution work with businesses like Trattoria Roma in your area.";
 
+// {{observation}} never falls back: without one the draft keeps the mark and waits as "Text chahiye" (lib/templates.ts)
+const OBS_TPL = "I saw that {{observation|your site is slow}}.";
+const OBS_FULL = "I saw that the menu is only a PDF, hard to read on a phone.";
+const OBS_EMPTY = "I saw that [OBSERVATION].";
+
 // "website" values from a CSV and the group lib/website.ts puts them in (computed below, so the guide never disagrees with the app)
-const SITE_EXAMPLES = ["bellavista.fr", "https://www.salon-claire.com/contact", "facebook.com/trattoriaroma", "instagram.com/salon.claire", "maps.google.com/?cid=1234", "tripadvisor.fr/Restaurant_Review-Bella", "linktr.ee/salonclaire", ""];
+const SITE_EXAMPLES = [
+  "bellavista.fr", "https://www.salon-claire.com/contact", "facebook.com/trattoriaroma", "instagram.com/salon.claire", "maps.google.com/?cid=1234",
+  "tripadvisor.fr/Restaurant_Review-Bella", "linktr.ee/salonclaire", "bella.wixsite.com/trattoria", "trattoria-roma.eatbu.com", "",
+];
+// free or temporary builder pages that count as "Bina website" (the full list is in lib/website.ts)
+const BUILDER_HOSTS = ["wixsite.com", "eatbu.com", "metro.rest", "framer.website", "myshopify.com", "mailchimpsites.com", "ody.app", "webflow.io"];
 
 // one mail of a French campaign and its English translation, as the Approve page shows them side by side
 const FR_MAIL = {
@@ -284,6 +299,7 @@ export default async function HelpPage() {
 
   const toc: { id: string; icon: IconName; label: string }[] = [
     { id: "overview", icon: "send", label: t("Ye software kya karta hai", "What this software does") },
+    { id: "pipeline", icon: "activity", label: t("Start se sending tak", "From Start to sending") },
     { id: "test-live", icon: "flask", label: t("Test (DRY-RUN) aur LIVE", "Test (DRY-RUN) and LIVE") },
     { id: "setup", icon: "flag", label: t("Pehli baar setup (7 steps)", "First-time setup (7 steps)") },
     { id: "daily", icon: "calendar", label: t("Roz ka kaam", "Daily routine") },
@@ -309,12 +325,23 @@ export default async function HelpPage() {
     { c: "email", need: "req", field: "Email *", what: t("Business ka email. Ek row mein ek email.", "The business's email. One email per row.") },
     { c: "business_name", need: "rec", field: t("Business ka naam", "Business name"), what: t("Business ka naam. Mail aur subject mein aata hai.", "The business name. Used in the mail and the subject.") },
     { c: "contact_name", need: "rec", field: t("Contact ka naam", "Contact name"), what: t("Owner ya manager ka first name: mail ‘Hello Marco,’ se shuru hoti hai. Pata na ho to khaali chhodo.", "The owner's or manager's first name: the mail starts with ‘Hello Marco,’. Leave it empty if you don't know it.") },
-    { c: "website", need: "rec", field: "Website", what: t("Business ki website. Isse pakka hota hai ki ek business ko ek hi mail jaye. AI sirf iska title aur description padhta hai, ye samajhne ke liye ki business kya karta hai. ‘Website ke hisaab se 2 templates’ wala campaign isi se template chunta hai: khaali, ya sirf Facebook / Instagram / Google Maps jaisa link = website nahi.", "The business website. It makes sure one business gets only one mail. The AI reads only its title and description, to understand what the business does. A ‘Two templates, by website’ campaign picks the template from it: empty, or only a Facebook / Instagram / Google Maps style link = no website.") },
+    { c: "website", need: "rec", field: "Website", what: t("Business ki website. Isse pakka hota hai ki ek business ko ek hi mail jaye. AI sirf iska title aur description padhta hai, ye samajhne ke liye ki business kya karta hai. ‘Website ke hisaab se templates’ wala campaign isi se lead ka group chunta hai: khaali, ya sirf Facebook / Instagram / Google Maps jaisa link, ya wixsite.com jaisa free page = Bina website.", "The business website. It makes sure one business gets only one mail. The AI reads only its title and description, to understand what the business does. A ‘Templates by website’ campaign picks the lead's group from it: empty, or only a Facebook / Instagram / Google Maps style link, or a free page like wixsite.com = No website.") },
     { c: "city", need: "rec", field: t("Shehar", "City"), what: t("Shehar, jaise mail mein ‘in Lyon’.", "The city, e.g. ‘in Lyon’ in the mail.") },
     { c: "country", need: "rec", field: t("Desh", "Country"), what: t("Desh. Isse mail ki bhasha aur timezone (sending window) set hote hain.", "The country. It sets the mail language and the timezone (sending window).") },
     { c: "category", need: "use", field: t("Business ka type", "Type of business"), what: t("Kis tarah ka business: ‘Italian restaurant’, ‘dental clinic’, ‘hair salon’.", "What kind of business: ‘Italian restaurant’, ‘dental clinic’, ‘hair salon’.") },
     { c: "about", need: "use", field: t("Business kya karta hai", "What they do"), what: t("Wo kya karte ya bechte hain, aapke shabdon mein (1 line).", "What they do or sell, in your words (1 line).") },
     { c: "note", need: "use", field: t("Ek sach baat", "One true fact"), what: t("Ek sach baat jo aapne khud dekhi aur pakka pata hai. AI ise ek baar, chhota sa use kar sakta hai.", "One true fact you checked yourself. The AI may mention it once, briefly.") },
+    { c: "reviews", need: "opt", field: "Google reviews", what: t("Google pe kitne reviews hain, sirf number. Template ke {{reviews}} mein aata hai; AI ise use nahi karta.", "How many Google reviews they have, just the number. Fills a template's {{reviews}}; the AI does not use it.") },
+    { c: "rating", need: "opt", field: "Rating", what: t("Google rating, jaise 4.8. Template ke {{rating}} mein aata hai; AI ise use nahi karta.", "The Google rating, like 4.8. Fills a template's {{rating}}; the AI does not use it.") },
+    {
+      c: "observation", need: "use", field: t("Observation (website ki ek problem)", "Observation (one problem on their website)"),
+      what: t(
+        "Unki website ki ek asli problem jo aapne khud dekhi, mail ki bhasha mein, template ke sentence mein fit ho aise. Template ke {{observation}} mein aata hai. Template ko chahiye aur ye khaali hai, to draft ‘Text chahiye’ mein rukta hai: wo hissa aap khud likhte ho.",
+        "One real problem you saw on their website yourself, in the mail's language, worded to fit the template's sentence. Fills a template's {{observation}}. If the template needs it and this is empty, the draft waits as ‘Needs your text’: you write that part yourself.",
+      ),
+    },
+    { c: "subject", need: "opt", field: t("Apna subject", "Own subject"), what: t("Is lead ke liye aapka apna subject. Sirf body ke saath kaam karta hai.", "Your own subject for this lead. Works only together with body.") },
+    { c: "body", need: "opt", field: t("Apna mail text", "Own mail text"), what: t("Is lead ke liye aapka apna mail text. subject aur body dono hon to is lead ko template ya AI ki jagah yahi text jaata hai, wahi rules ke saath. Approve phir bhi aap khud karte ho.", "Your own mail text for this lead. With both subject and body, this lead gets this text instead of a template or the AI, under the same rules. You still approve it yourself.") },
     { c: "phone", need: "opt", field: "Phone", what: t("Sirf aapke record ke liye. Mail mein nahi aata.", "Only for your records. Not used in the mail.") },
   ];
   const placeholders: { p: string; means: string; ex: string }[] = [
@@ -325,8 +352,15 @@ export default async function HelpPage() {
     { p: "{{country}}", means: "country", ex: "France" },
     {
       p: "{{website|your website}}",
-      means: t("Lead ki apni website ka naam (website column se, bina https:// aur www.). Website na ho, ya sirf Facebook / Maps jaisa link ho, to ‘your website’", "The lead's own website name (from the website column, without https:// and www.). ‘your website’ if there is none, or only a Facebook / Maps style link"),
+      means: t("Lead ki apni website ka naam (website column se, bina https:// aur www.). Website na ho, ya sirf Facebook / Maps jaisa link ya free builder page ho, to ‘your website’", "The lead's own website name (from the website column, without https:// and www.). ‘your website’ if there is none, or only a Facebook / Maps style link or a free builder page"),
       ex: "bellavista.fr",
+    },
+    { p: "{{reviews|many}}", means: t("reviews (Google reviews ki ginti); khaali ho to ‘many’", "reviews (the Google review count); ‘many’ if it is empty"), ex: "312" },
+    { p: "{{rating}}", means: t("rating (Google rating)", "rating (the Google rating)"), ex: "4.8" },
+    {
+      p: "{{observation}}",
+      means: t("observation: website ki ek problem jo aapne dekhi. Iska | wala text KABHI use nahi hota: khaali ho to draft ‘Text chahiye’ mein rukta hai", "observation: one website problem you saw. Its | text is NEVER used: if it is empty, the draft waits as ‘Needs your text’"),
+      ex: "the menu is only a PDF",
     },
     { p: "{{my_name}}", means: t("Aapka Naam (Settings → Sender profile)", "Your Name (Settings → Sender profile)"), ex: t("Aapka naam", "Your name") },
     { p: "{{my_business}}", means: t("Aapka Business (Settings → Sender profile)", "Your Business (Settings → Sender profile)"), ex: "Brighton Solution" },
@@ -334,12 +368,16 @@ export default async function HelpPage() {
 
   const words: { w: string; d: string }[] = [
     { w: "Lead", d: t("Ek business jise aap mail bhejna chahte ho. CSV ki ek row = ek lead.", "A business you want to email. One CSV row = one lead.") },
-    { w: "Campaign", d: t("Ek list + bhasha + timezone + mail ka tarika (AI, ek Template, ya Website ke hisaab se 2 templates). Isi se mails banti aur jaati hain.", "One list + language + timezone + how mails are written (AI, one Template, or two templates by website). Mails are made and sent through it.") },
-    { w: "Draft", d: t("Mail jo ban chuki hai par abhi gayi nahi.", "A mail that is written but not sent yet.") },
+    { w: "Campaign", d: t("Ek list + bhasha + timezone + mail ka tarika (AI, ek Template, ya Website ke hisaab se templates). Start ke baad worker iske har Ready lead ka draft banata hai.", "One list + language + timezone + how mails are written (AI, one Template, or Templates by website). After Start the worker makes a draft for each of its Ready leads.") },
+    { w: "Draft", d: t("Mail jo ban chuki hai par abhi approve ya send nahi hui. Har draft aapke Approve ka wait karta hai.", "A mail that is written but not approved or sent yet. Every draft waits for your Approve.") },
+    { w: t("Approval baaki", "Awaiting approval"), d: t("Draft jo aapke Approve ka wait kar raha hai. Approve karna aakhri step hai: uske baad mail apne aap jaati hai.", "A draft waiting for your Approve. Approving is the last step: after it, the mail goes out by itself.") },
+    { w: t("Text chahiye", "Needs your text"), d: t("Draft jo aapke text ka wait kar raha hai: template ko {{observation}} chahiye tha par lead ke paas nahi tha ([OBSERVATION] likha aata hai), template ya lead ka apna CSV text us lead ke liye koi niyam todta hai (wajah likhi hoti hai), ya AI 5 baar mein mail nahi likh paya. Text edit karo se theek karo, tabhi wo approve ho sakta hai.", "A draft waiting for your text: its template needs {{observation}} but the lead has none (it shows [OBSERVATION]), the template or the lead's own CSV text breaks a rule for this lead (the reasons are shown), or the AI could not write the mail in 5 tries. Fix it with Edit text; only then can it be approved.") },
+    { w: "Send queue", d: t("Aapki approve ki hui mails jo abhi jaani baaki hain. Worker inhe sending window, gap aur daily limit ke andar apne aap bhejta hai. Jis lead ko ab mail nahi ja sakti (Block List, opt-out, reply), uski mail isse hamesha ke liye nikal jaati hai.", "The mails you approved that still have to go out. The worker sends them by itself within the sending window, the gap and the daily limit. A lead that may no longer be mailed (Block list, opt-out, reply) has its mail taken out of it for good.") },
+    { w: "Observation", d: t("Lead ki website ki ek asli problem jo aapne khud dekhi (CSV ka observation column). Template ke {{observation}} mein jaati hai; app ise kabhi khud nahi banata.", "One real problem on the lead's website that you saw yourself (the CSV's observation column). It goes into a template's {{observation}}; the app never makes it up.") },
     { w: "English translation", d: t("Har mail ka English matlab, mail ke right side mein. Sirf aapke check ke liye: lead ko kabhi nahi jaata.", "The meaning of every mail in English, on the right of the mail. Only for you to check: the lead never gets it.") },
     { w: "DRY-RUN", d: t("Test mode: har mail sirf aapke Test address pe jaati hai.", "Test mode: every mail goes only to your Test address.") },
     { w: "LIVE", d: t("Asli mode: approve ki hui mails asli leads ko jaati hain.", "Real mode: approved mails go to the real leads.") },
-    { w: "Worker", d: t("Server pe chalne wala program. Har minute chalta hai: drafts banata hai, zyada se zyada ek mail bhejta hai, aur har 10 minute mein inbox padhta hai.", "A program running on the server. It runs every minute: writes drafts, sends at most one mail, and reads the inbox every 10 minutes.") },
+    { w: "Worker", d: t("Server pe chalne wala program. Har minute chalta hai: drafts banata hai (template se 50 tak, AI se 3), zyada se zyada ek approve ki hui mail bhejta hai, aur har 10 minute mein inbox padhta hai.", "A program running on the server. It runs every minute: makes drafts (up to 50 from a template, 3 with the AI), sends at most one approved mail, and reads the inbox every 10 minutes.") },
     { w: "Sending window", d: t("Din ka wo samay (jaise 09:30-17:30, lead ke timezone mein) jab mails jaati hain.", "The time of day (e.g. 09:30-17:30, in the lead's timezone) when mails go out.") },
     { w: "Daily limit", d: t("Ek din mein zyada se zyada kitni mails jaayengi.", "The most mails that go out in one day.") },
     { w: "Warm-up", d: t("Naye domain ki daily limit ko dheere-dheere badhana, taaki mails spam mein na jaayein.", "Raising a new domain's daily limit slowly, so mails don't land in spam.") },
@@ -357,8 +395,9 @@ export default async function HelpPage() {
     { w: "From name", d: t("Lead ke inbox mein dikhne wala naam, jaise Brighton Solution.", "The name shown in the lead's inbox, e.g. Brighton Solution.") },
     { w: "Signature / Footer", d: t("Mail ke neeche. Signature = aapka naam, role, website. Footer = address kahan mila, STOP se mail band karne ka tarika aur postal address. Dono app khud lagata hai.", "At the end of each mail. Signature = your name, role, website. Footer = where the address was found, how to stop mails with STOP, and your postal address. The app adds both itself.") },
     { w: "Placeholder", d: t("Template mein {{...}} wali jagah, jo har lead ki details se bharti hai.", "A {{...}} spot in a template that is filled with each lead's details.") },
-    { w: t("Kiske liye", "Written for"), d: t("Template ka tag: Sabke liye, Jinki website NAHI hai, ya Jinki website HAI. Campaign form isi se sahi template sujhata hai.", "A template's tag: Any lead, Leads without a website, or Leads with a website. The campaign form uses it to suggest the right template.") },
-    { w: t("Bina website / Website wale", "No website / Has a website"), d: t("Leads ke do group. Website wale = CSV mein lead ki apni website hai. Bina website = website khaali hai, ya sirf Facebook, Instagram, Google Maps, directory ya booking site ka link hai.", "The two groups of leads. Has a website = the CSV gives the lead's own website. No website = the website is empty, or only a Facebook, Instagram, Google Maps, directory or booking site link.") },
+    { w: t("Group (template ka)", "Group (of a template)"), d: t("Template ka tag: Bina website, Website hai, ya Dono groups. Campaign form sirf campaign ki bhasha wale templates pehle se tick karta hai: group ka apna, warna Dono groups wala. Us bhasha mein koi na ho to kuch tick nahi hota: aap khud chuno.", "A template's tag: No website, Has a website, or Both groups. The campaign form pre-ticks only templates in the campaign's language: the group's own, else the Both groups ones. If none is in that language, nothing is ticked: you choose.") },
+    { w: t("Bina website / Website hai", "No website / Has a website"), d: t("Leads ke do group. Website hai = CSV mein lead ki apni website hai. Bina website = website khaali hai, ya sirf Facebook, Instagram, Google Maps, directory, booking ya delivery site ka link, ya wixsite.com, eatbu.com jaisa free / temporary builder page hai.", "The two groups of leads. Has a website = the CSV gives the lead's own website. No website = the website is empty, or only a Facebook, Instagram, Google Maps, directory, booking or delivery link, or a free / temporary builder page like wixsite.com or eatbu.com.") },
+    { w: t("Baari baari (round-robin)", "In turn (round-robin)"), d: t("Ek group mein 2-3 templates tick hon to us group ke leads ko wo ek ke baad ek milte hain: pehli lead ko A, doosri ko B, teesri ko C, chauthi ko phir A.", "With 2-3 templates ticked for a group, its leads get them one after another: the first lead A, the second B, the third C, the fourth A again.") },
     { w: "Toast", d: t("Button dabane ke baad aane wala chhota popup.", "The small pop-up that appears after you press a button.") },
   ];
 
@@ -413,8 +452,8 @@ export default async function HelpPage() {
           "A simple guide to the whole software. Read it top to bottom, or jump to any topic from the list. Under 'Every menu explained', click any menu to see every section and button inside it.",
         )}
         sub={t(
-          "Test (DRY-RUN) se LIVE tak ka flow, har menu aur button ka kaam, aur CSV mein kya dena hai.",
-          "The flow from Test (DRY-RUN) to LIVE, what every menu and button does, and what to put in the CSV.",
+          "Test (DRY-RUN) se LIVE tak ka flow, Start se Approve aur sending tak ek mail ka safar, har menu aur button ka kaam, aur CSV mein kya dena hai.",
+          "The flow from Test (DRY-RUN) to LIVE, a mail's way from Start through Approve to sending, what every menu and button does, and what to put in the CSV.",
         )}
       />
 
@@ -433,8 +472,8 @@ export default async function HelpPage() {
             sub={t("Aapke mailbox se, aapke naam se, har business ko sirf ek soch-samajh ke likhi mail", "From your mailbox, in your name: one carefully written mail to each business")}>
             <p className="text-sm leading-relaxed text-slate-700">
               {t(
-                "Ye app naye business leads ko cold email bhejta hai: aapke apne mailbox (Hostinger) se, dheere aur safe tarike se. Har lead ko sirf ek mail jaati hai, aur koi bhi mail aapke approve kiye bina nahi jaati.",
-                "This app sends cold emails to new business leads from your own mailbox (Hostinger), slowly and safely. Each lead gets only one mail, and no mail goes out without your approval.",
+                "Ye app naye business leads ko cold email bhejta hai: aapke apne mailbox (Hostinger) se, dheere aur safe tarike se. Har lead ko sirf ek mail jaati hai. Saari mails pehle ban ke taiyaar hoti hain; aapka Approve aakhri step hai, aur approve ki hui mail limits ke andar apne aap jaati hai. Aapke approve kiye bina koi mail nahi jaati.",
+                "This app sends cold emails to new business leads from your own mailbox (Hostinger), slowly and safely. Each lead gets only one mail. All mails are made and prepared first; your Approve is the last step, and an approved mail goes out by itself within the limits. No mail goes out without your approval.",
               )}
             </p>
             <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -443,14 +482,14 @@ export default async function HelpPage() {
               </Feature>
               <Feature icon="bot" title={t("AI ya fixed template", "AI or a fixed template")}>
                 {t(
-                  "Mail AI likhta hai (har lead ke liye alag), ya aapka fixed template use hota hai. Chaho to do templates: ek unke liye jinki website NAHI hai, doosra unke liye jinki website HAI; app har lead ke liye khud sahi wala chunta hai.",
-                  "The AI writes each mail (different for every lead), or your fixed template is used. You can also use two templates: one for leads without a website, one for leads with a website; the app picks the right one for every lead.",
+                  "Mail AI likhta hai (har lead ke liye alag), ya aapka fixed template use hota hai. Chaho to website ke hisaab se: Bina website wale leads ke liye 1-3 templates, Website hai wale leads ke liye 1-3; app har lead ka group khud dekhta hai aur group ke templates baari baari lagata hai.",
+                  "The AI writes each mail (different for every lead), or your fixed template is used. Or by website: 1-3 templates for leads with no website, 1-3 for leads that have one; the app finds each lead's group itself and uses the group's templates in turn.",
                 )}
               </Feature>
-              <Feature icon="check-check" title={t("Har mail aap approve karte ho", "You approve every mail")}>
+              <Feature icon="check-check" title={t("Approve aakhri step, sirf aapka", "Approve is the last step, and only yours")}>
                 {t(
-                  "Aapke approve kiye bina koi mail nahi jaati. Left mein mail jaisi jayegi (kisi bhi bhasha mein), right mein hamesha uska English matlab.",
-                  "No mail goes out without your approval. On the left the mail as it will be sent (in any language), on the right always its meaning in English.",
+                  "Koi cheez apne aap approve nahi karti, campaign Start bhi nahi. Left mein mail jaisi jayegi (kisi bhi bhasha mein), right mein hamesha uska English matlab. Approve hote hi mail apne aap jaati hai.",
+                  "Nothing approves by itself, not even starting a campaign. On the left the mail as it will be sent (in any language), on the right always its meaning in English. Once approved, the mail goes out by itself.",
                 )}
               </Feature>
               <Feature icon="clock" title={t("Dheere aur safe sending", "Slow, safe sending")}>
@@ -465,12 +504,13 @@ export default async function HelpPage() {
             </div>
 
             <Sub icon="arrow-right" className="mt-5">{t("Poora flow ek nazar mein", "The whole flow at a glance")}</Sub>
-            <ol className="grid gap-2 md:grid-cols-5">
+            <ol className="grid gap-2 md:grid-cols-3">
               {([
                 { icon: "upload", title: m("/import").label, text: t("Leads ki list daalo; app har address check karta hai", "Add a list of leads; the app checks every address") },
-                { icon: "megaphone", title: m("/campaigns").label, text: t("Campaign banao; AI ya template 5 sample mails banata hai", "Create a campaign; the AI or a template makes 5 sample mails") },
-                { icon: "check-check", title: m("/review").label, text: t("Har mail padho (saath mein uska English matlab) aur approve karo", "Read every mail (with its English meaning) and approve it") },
-                { icon: "send", title: t("Worker bhejta hai", "The worker sends"), text: t("Sending window mein, ek-ek karke, gap ke saath", "In the sending window, one by one, with a gap") },
+                { icon: "megaphone", title: m("/campaigns").label, text: t("Campaign banao aur start karo; Start se koi mail approve nahi hoti", "Create a campaign and start it; starting approves no mail") },
+                { icon: "bot", title: t("Worker drafts banata hai", "The worker makes drafts"), text: t("Har Ready lead ka draft: template se har minute 50 tak, AI se 3", "A draft for every Ready lead: up to 50 a minute from a template, 3 with the AI") },
+                { icon: "check-check", title: m("/review").label, text: t("Aakhri step: har mail padho (saath mein English matlab) aur approve karo", "The last step: read every mail (with its English meaning) and approve it") },
+                { icon: "send", title: t("Apne aap sending", "Sending by itself"), text: t("Sirf approve ki hui: window, random gap, daily limit aur plan ke 40% ke andar", "Approved mails only: within the window, a random gap, the daily limit and 40% of the plan") },
                 { icon: "inbox", title: m("/replies").label, text: t("Jawab yahan aate hain; reply apne webmail se karo", "Answers land here; reply from your webmail") },
               ] as { icon: IconName; title: string; text: string }[]).map((s, i) => (
                 <li key={i} className="flex min-w-0 items-start gap-3 rounded-lg border border-slate-200/80 bg-white p-3 md:block">
@@ -485,6 +525,67 @@ export default async function HelpPage() {
                 </li>
               ))}
             </ol>
+          </Section>
+
+          {/* ---------------- 1b. from Start to sending (the pipeline the Campaign and Approve pages count) ---------------- */}
+          <Section id="pipeline" icon="activity" title={t("Start se sending tak: ek mail ka safar", "From Start to sending: a mail's way")}
+            sub={t("Saari mails pehle banti hain, aapka Approve aakhri step hai, phir sending apne aap", "All mails are made first, your Approve is the last step, then sending happens by itself")}>
+            <p className="text-sm leading-relaxed text-slate-700">
+              {t(
+                <>Campaign pe <B v="primary" icon="play">Campaign start karo (koi mail approve nahi hogi)</B> do baar dabao. Start se koi mail approve nahi hoti. Ab worker campaign ke <b>har</b> Ready lead ka draft banata hai, aur har draft Approve page pe aapka wait karta hai. Jo mail aap approve karte ho, wahi bheji jaati hai: apne aap, limits ke andar.</>,
+                <>On a campaign, press <B v="primary" icon="play">Start campaign (nothing gets approved)</B> twice. Starting approves no mail. The worker now makes a draft for <b>every</b> Ready lead of the campaign, and each draft waits for you on the Approve page. Only the mails you approve are sent: by themselves, within the limits.</>,
+              )}
+            </p>
+
+            <Sub icon="list" className="mt-5">{t("Har stage ka matlab (Campaign aur Approve page pe yahi ginti)", "What each stage means (the same counts on the Campaign and Approve pages)")}</Sub>
+            <Defs items={[
+              {
+                k: <Badge v="stage" label={t("1 · Draft banne baaki", "1 · Drafts to make")} tone="slate" dot={false} />,
+                d: t(
+                  "Campaign ke Ready leads jinka draft worker ne abhi nahi banaya. Start ke baad worker har minute ek batch banata hai: template ya lead ke apne text se 50 tak, AI se 3 (AI ki rate limit lage to ruk ke). AI draft na ban paye to app thodi der baad khud dobara try karta hai; 5 baar fail ho to draft ‘Text chahiye’ mein aata hai. Template ya lead ka apna text dobara try nahi hota: niyam tode to draft seedha ‘Text chahiye’ mein.",
+                  "Ready leads of the campaign the worker has not made a draft for yet. After Start the worker makes a batch every minute: up to 50 from a template or the lead's own text, 3 with the AI (pausing when the AI's rate limit is hit). If the AI cannot write a draft, the app tries again by itself a little later; after 5 failed tries the draft goes to ‘Needs your text’. A template or the lead's own text is not retried: if it breaks a rule, the draft goes straight to ‘Needs your text’.",
+                ),
+              },
+              {
+                k: <Badge v="stage" label={t("2 · Text chahiye", "2 · Needs your text")} tone="amber" dot={false} />,
+                d: t(
+                  <>Draft jo aapke text ka wait kar raha hai, teen wajah se: (1) template mein <Code>{"{{observation}}"}</Code> hai par lead ki observation nahi di gayi: app koi andaza ya default nahi bharta, mail mein <Code>[OBSERVATION]</Code> likha aata hai; (2) template ya lead ka apna CSV text is lead ke liye koi niyam todta hai (jaise ‘body has 48 words’, aakhir mein sawaal nahi, body mein link): card pe wajah likhi hoti hai; (3) AI 5 baar mein mail nahi likh paya (text khaali bhi ho sakta hai). Aisi mail approve nahi ho sakti. <B icon="pencil">Text edit karo</B> se theek karo aur save karo: mail ‘Approval baaki’ mein aa jaati hai (approve abhi bhi nahi hui), aur uska English translation tabhi banta hai.</>,
+                  <>A draft waiting for your text, for one of three reasons: (1) the template uses <Code>{"{{observation}}"}</Code> but the lead has none: the app fills in no guess and no default, the mail shows <Code>[OBSERVATION]</Code>; (2) the template or the lead&apos;s own CSV text breaks a rule for this lead (e.g. ‘body has 48 words’, no question at the end, a link in the body): the card lists the reasons; (3) the AI could not write the mail in 5 tries (the text may be empty). Such a mail cannot be approved. Fix it with <B icon="pencil">Edit text</B> and save: the mail moves to ‘Awaiting approval’ (still not approved), and only then is its English translation made.</>,
+                ),
+              },
+              {
+                k: <Badge v="stage" label={t("3 · Approval baaki", "3 · Awaiting approval")} tone="amber" dot={false} />,
+                d: t(
+                  <>Taiyaar drafts (5 samples bhi) jo aapke Approve ka wait kar rahe hain. Yahi aakhri step hai: ek mail pe <B v="success" icon="check">Approve karo</B>, checkbox se chuni hui mails pe <B v="success" icon="check-check">Selected approve karo</B>, ya <B icon="check-check">Sab approve karo</B>. Kai mails ek saath approve karne ke liye button do baar dabana hota hai. Approve sirf wahi text approve karta hai jo aapne dekha: mail beech mein badli ho (jaise naya version) to wo approve nahi hoti, jab tak aap use dobara na padho.</>,
+                  <>Finished drafts (the 5 samples too) waiting for your Approve. This is the last step: <B v="success" icon="check">Approve</B> on one mail, <B v="success" icon="check-check">Approve selected</B> for the mails you ticked, or <B icon="check-check">Approve all</B>. Approving several mails at once takes two presses of the button. Approve only approves exactly the text you saw: a mail that changed since (e.g. a new version) is refused until you read it again.</>,
+                ),
+              },
+              {
+                k: <Badge v="stage" label={t("4 · Send queue", "4 · Send queue")} tone="sky" dot={false} />,
+                d: t(
+                  "Aapki approve ki hui mails. Worker inhe ek-ek karke apne aap bhejta hai: sirf sending din aur sending window mein (campaign ke timezone mein), har mail ke beech random gap, warm-up ki daily limit tak, aur kabhi plan ke 40% se zyada nahi. Har send se pehle Ledger aur Block List check hote hain; bounce ya SMTP error pe auto-pause. Jis lead ko ab mail nahi ja sakti (Block List, opt-out, reply), uski bina bheji mail queue se hamesha ke liye nikal jaati hai, taaki wo baaki approved mails ko na roke. Campaign page ka ‘Approved queue kab tak’ tile andaza dikhata hai ki queue kab tak chali jayegi. DRY-RUN mein jo mails test address pe ja chuki hain, wo queue mein nahi gini jaati: LIVE ke baad wo leads ko jaati hain.",
+                  "The mails you approved. The worker sends them one by one by itself: only on sending days and inside the sending window (in the campaign's timezone), with a random gap between mails, up to the warm-up daily limit, and never above 40% of the plan. The Ledger and the Block list are checked before every send; bounces or SMTP errors trigger the auto-pause. A lead that may no longer be mailed (Block list, opt-out, reply) has its unsent mail taken out of the queue for good, so it never holds up the other approved mails. The ‘Approved queue sent by’ tile on the Campaign page estimates when the queue will be sent. In DRY-RUN, mails already sent to the test address are not counted in the queue: they go to the leads after LIVE.",
+                ),
+              },
+              { k: <Badge v="stage" label={t("5 · Bheji gayi", "5 · Sent")} tone="emerald" dot={false} />, d: t("Lead ko chali gayi (reply, bounce aur opt-out samet). Har mail ka text Sent page pe.", "Sent to the lead (replies, bounces and opt-outs included). The text of every mail is on the Sent page.") },
+              { k: <Badge v="stage" label={t("Fail / manual check", "Failed / manual check")} tone="red" dot={false} />, d: t("Mail nahi ja payi, ya pata nahi gayi ya nahi. Manual check wale leads Contacts mein dekho; app unhe kabhi khud dobara nahi bhejta.", "The mail could not be sent, or it is unclear whether it went out. Look at the manual-check leads in Contacts; the app never resends them by itself.") },
+              { k: <Badge v="stage" label="Skip" tone="slate" dot={false} />, d: t("In leads ko mail nahi jayegi: pehle contact ho chuke (Ledger), Block List mein hain, ya aapne reject kiye.", "These leads get no mail: contacted before (Ledger), on the Block list, or rejected by you.") },
+            ]} />
+
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <Callout tone="success" title={t("Approve sirf aapka click karta hai", "Only your click approves")}>
+                {t(
+                  "Na campaign Start, na 5 samples, na Resume, na LIVE switch: koi bhi mail apne aap approve nahi hoti. Sirf Approve page pe aapka Approve (ek mail, chuni hui, ya sab), aur sirf usi text pe jo aapne dekha.",
+                  "Not starting a campaign, not the 5 samples, not Resume, not the LIVE switch: no mail is ever approved by itself. Only your Approve on the Approve page (one mail, the selected ones, or all), and only for the text you saw.",
+                )}
+              </Callout>
+              <Callout tone="info" title={t("5 samples: sirf preview", "5 samples: only a preview")}>
+                {t(
+                  "Start se pehle ‘5 sample drafts banao’ dabao to list ke pehle 5 leads ki mails dekh sakte ho (optional). Ye bhi approve nahi hoti: Start ke baad baaki drafts ke saath ‘Approval baaki’ mein milti hain.",
+                  "Before Start, ‘Make 5 sample drafts’ shows you the mails of the first 5 leads (optional). They are not approved either: after Start they wait in ‘Awaiting approval’ with all the other drafts.",
+                )}
+              </Callout>
+            </div>
           </Section>
 
           {/* ---------------- 2. test vs live ---------------- */}
@@ -531,8 +632,8 @@ export default async function HelpPage() {
             <div className="mt-4">
               <Callout tone="warn" title={t("Dhyan do: approval yaad rehta hai", "Careful: approvals are kept")}>
                 {t(
-                  "DRY-RUN mein approve ki hui mail approve hi rehti hai. LIVE karte hi wahi mails asli leads ko jaane lagti hain, chahe wo pehle test address pe ja chuki hon. Isliye DRY-RUN mein bhi sirf wahi approve karo jo sach mein lead ko bhejni hai. Approve ki hui koi mail rokni ho to us lead ka email Block List mein daal do.",
-                  "A mail approved in DRY-RUN stays approved. As soon as you go LIVE, those same mails start going to the real leads, even if they already went to your test address. So even in DRY-RUN, only approve what you really want the lead to get. To stop an approved mail, add that lead's email to the Block list.",
+                  "DRY-RUN mein approve ki hui mail approve hi rehti hai. LIVE karte hi wahi mails asli leads ko jaane lagti hain, chahe wo pehle test address pe ja chuki hon (DRY-RUN mein test address pe ja chuki mails send queue mein nahi gini jaati, par LIVE ke baad leads ko jaati hain). Isliye DRY-RUN mein bhi sirf wahi approve karo jo sach mein lead ko bhejni hai. Approve ki hui koi mail rokni ho to us lead ka email Block List mein daal do: wo mail queue se hamesha ke liye nikal jaati hai.",
+                  "A mail approved in DRY-RUN stays approved. As soon as you go LIVE, those same mails start going to the real leads, even if they already went to your test address (in DRY-RUN, mails already sent to the test address are not counted in the send queue, but they go to the leads after LIVE). So even in DRY-RUN, only approve what you really want the lead to get. To stop an approved mail, add that lead's email to the Block list: the mail leaves the queue for good.",
                 )}
               </Callout>
             </div>
@@ -609,33 +710,33 @@ export default async function HelpPage() {
                 )}</p>
               </StepRow>
 
-              <StepRow n={5} title={t("Campaign banao, 5 samples padho aur start karo", "Create a campaign, read 5 samples and start")} href="/campaigns" cta={t("Campaigns kholo", "Open campaigns")}>
+              <StepRow n={5} title={t("Campaign banao aur start karo", "Create a campaign and start it")} href="/campaigns" cta={t("Campaigns kholo", "Open campaigns")}>
                 <p>{t(
-                  <>{M("/campaigns")} mein list chuno, bhasha aur timezone check karo, aur <b>Mail kaise banegi</b> mein <b>AI har lead ke liye likhega</b>, ek <b>Template</b> (1–6), ya <b>Website ke hisaab se 2 templates</b> chuno. Phir <B v="primary" icon="plus">Campaign banao</B>. Isse abhi koi mail nahi jaati.</>,
-                  <>In {M("/campaigns")}, choose the list, check the language and timezone, and under <b>How mails are written</b> pick <b>AI writes each mail</b>, one <b>Template</b> (1–6), or <b>Two templates, by website</b>. Then press <B v="primary" icon="plus">Create campaign</B>. No mail goes out yet.</>,
+                  <>{M("/campaigns")} mein list chuno, bhasha aur timezone check karo, aur <b>Mail kaise banegi</b> mein <b>AI har lead ke liye likhega</b>, ek <b>Template</b> (1–6), ya <b>Website ke hisaab se templates</b> chuno. Phir <B v="primary" icon="plus">Campaign banao</B>. Isse abhi koi mail nahi jaati.</>,
+                  <>In {M("/campaigns")}, choose the list, check the language and timezone, and under <b>How mails are written</b> pick <b>AI writes each mail</b>, one <b>Template</b> (1–6), or <b>Templates by website</b>. Then press <B v="primary" icon="plus">Create campaign</B>. No mail goes out yet.</>,
                 )}</p>
                 <p>{t(
-                  <><b>Website ke hisaab se 2 templates</b>: ek template <b>Jinki website NAHI hai</b> unke liye, doosra <b>Jinki website HAI</b> unke liye. App har lead ke liye CSV ke website column se khud sahi wala chunta hai. <a href="#by-website" className="link">Kaunsi lead kis group mein?</a></>,
-                  <><b>Two templates, by website</b>: one template for <b>Leads without a website</b>, another for <b>Leads with a website</b>. The app picks the right one for every lead from the CSV&apos;s website column. <a href="#by-website" className="link">Which lead goes in which group?</a></>,
+                  <><b>Website ke hisaab se templates</b>: <b>{siteGroup(false, t)}</b> group ke liye 1–3 templates aur <b>{siteGroup(true, t)}</b> group ke liye 1–3 templates tick karo. App har lead ka group CSV ke website column se khud dekhta hai, aur group ke ticked templates baari baari (round-robin) lagata hai. <a href="#by-website" className="link">Kaunsi lead kis group mein?</a></>,
+                  <><b>Templates by website</b>: tick 1–3 templates for the <b>{siteGroup(false, t)}</b> group and 1–3 for the <b>{siteGroup(true, t)}</b> group. The app finds each lead&apos;s group from the CSV&apos;s website column, and uses the group&apos;s ticked templates in turn (round-robin). <a href="#by-website" className="link">Which lead goes in which group?</a></>,
                 )}</p>
                 <p>{t(
-                  <>Campaign page pe <B icon="bot">5 sample drafts banao</B> dabao aur paanchon mails dhyan se padho. Mail English mein na ho to har mail ke right mein uska English translation padho. Koi pasand na aaye to us pe <B icon="refresh">Naya version likho</B>.</>,
-                  <>On the campaign page, press <B icon="bot">Make 5 sample drafts</B> and read all five mails carefully. If the mails are not in English, read the English translation on the right of each one. If you don&apos;t like one, press <B icon="refresh">Write a new version</B> on it.</>,
+                  <>Chaho to campaign page pe <B icon="bot">5 sample drafts banao</B> dabao aur mails padho (optional preview). Mail English mein na ho to right mein uska English translation padho. Koi pasand na aaye to us pe <B icon="refresh">Naya version likho</B>.</>,
+                  <>If you like, press <B icon="bot">Make 5 sample drafts</B> on the campaign page and read the mails (an optional preview). If they are not in English, read the English translation on the right. If you don&apos;t like one, press <B icon="refresh">Write a new version</B> on it.</>,
                 )}</p>
                 <p>{t(
-                  <>Sab theek ho to <B v="primary" icon="play">Samples theek hain: approve karke start karo</B> do baar dabao. Start se pehle app DNS (SPF, DKIM) dobara check karta hai.</>,
-                  <>If all is good, press <B v="primary" icon="play">Samples look good: approve and start</B> twice. Before starting, the app checks DNS (SPF, DKIM) again.</>,
+                  <>Phir <B v="primary" icon="play">Campaign start karo (koi mail approve nahi hogi)</B> do baar dabao. Start ke liye kam se kam ek Ready lead aur sahi SPF + DKIM chahiye (app DNS dobara check karta hai). Start se koi mail approve nahi hoti: worker ab har Ready lead ka draft banata hai. <a href="#pipeline" className="link">Aage kya hota hai?</a></>,
+                  <>Then press <B v="primary" icon="play">Start campaign (nothing gets approved)</B> twice. Starting needs at least one Ready lead and working SPF + DKIM (the app checks DNS again). Starting approves no mail: the worker now makes a draft for every Ready lead. <a href="#pipeline" className="link">What happens next?</a></>,
                 )}</p>
               </StepRow>
 
               <StepRow n={6} title={t("Mails approve karo, pehli mail jaane do", "Approve mails and let the first one go")} href="/review" cta={t("Approve page kholo", "Open Approve page")}>
                 <p>{t(
-                  <>Abhi DRY-RUN mein hi raho. {M("/review")} pe har mail padho: left mein mail jaisi jayegi, right mein uska English matlab. Sab theek ho to <B v="success" icon="check">Approve karo</B> dabao.</>,
-                  <>Stay in DRY-RUN for now. On {M("/review")}, read each mail: on the left the mail as it will be sent, on the right its meaning in English. If all is right, press <B v="success" icon="check">Approve</B>.</>,
+                  <>Abhi DRY-RUN mein hi raho. {M("/review")} pe mails padho: left mein mail jaisi jayegi, right mein uska English matlab. Theek ho to <B v="success" icon="check">Approve karo</B> dabao, ya checkbox lagao aur <B v="success" icon="check-check">Selected approve karo</B> (do baar). Ye aakhri step hai.</>,
+                  <>Stay in DRY-RUN for now. On {M("/review")}, read the mails: on the left the mail as it will be sent, on the right its meaning in English. If it is right, press <B v="success" icon="check">Approve</B>, or tick the checkboxes and press <B v="success" icon="check-check">Approve selected</B> (twice). This is the last step.</>,
                 )}</p>
                 <p>{t(
-                  <>Worker sending window mein inhe aapke Test address pe bhejta hai. Apne inbox mein aur {M("/sent")} ke <b>Dry-run</b> tab mein dekho ki mail bilkul sahi dikh rahi hai: From name, text, signature, footer.</>,
-                  <>The worker sends them to your Test address inside the sending window. Check in your inbox and in the <b>Dry-run</b> tab of {M("/sent")} that the mail looks exactly right: From name, text, signature, footer.</>,
+                  <>Approve ki hui mails worker apne aap sending window mein aapke Test address pe bhejta hai. Apne inbox mein aur {M("/sent")} ke <b>Dry-run</b> tab mein dekho ki mail bilkul sahi dikh rahi hai: From name, text, signature, footer.</>,
+                  <>The worker sends the approved mails to your Test address by itself, inside the sending window. Check in your inbox and in the <b>Dry-run</b> tab of {M("/sent")} that the mail looks exactly right: From name, text, signature, footer.</>,
                 )}</p>
               </StepRow>
 
@@ -660,8 +761,8 @@ export default async function HelpPage() {
               </DayRow>
               <DayRow n={2} head={M("/review")}>
                 {t(
-                  <>Nayi mails padho (doosri bhasha ki mail ka matlab right side ke English mein): theek ho to <B v="success" icon="check">Approve karo</B>, chhoti galti ho to <B icon="pencil">Text edit karo</B>, pasand na aaye to <B icon="refresh">Naya version likho</B>, lead hi galat ho to <B v="reject" icon="x">Reject karo</B>.</>,
-                  <>Read the new mails (for a mail in another language, the meaning is in the English on the right): <B v="success" icon="check">Approve</B> the good ones, <B icon="pencil">Edit text</B> for small mistakes, <B icon="refresh">Write a new version</B> if you don&apos;t like one, <B v="reject" icon="x">Reject</B> if the lead itself is wrong.</>,
+                  <>‘Approval baaki’ ki nayi mails padho (doosri bhasha ki mail ka matlab right side ke English mein): theek ho to <B v="success" icon="check">Approve karo</B> (ya kai chuno aur <B v="success" icon="check-check">Selected approve karo</B>), chhoti galti ho to <B icon="pencil">Text edit karo</B>, pasand na aaye to <B icon="refresh">Naya version likho</B>, lead hi galat ho to <B v="reject" icon="x">Reject karo</B>. Phir ‘Text chahiye’ tab ki mails theek karo: [OBSERVATION] ki jagah apna text likho, ya likhi hui wajah (jaise kam words) Text edit se theek karo. Approve hote hi mails apne aap jaati hain.</>,
+                  <>Read the new mails under ‘Awaiting approval’ (for a mail in another language, the meaning is in the English on the right): <B v="success" icon="check">Approve</B> the good ones (or tick several and press <B v="success" icon="check-check">Approve selected</B>), <B icon="pencil">Edit text</B> for small mistakes, <B icon="refresh">Write a new version</B> if you don&apos;t like one, <B v="reject" icon="x">Reject</B> if the lead itself is wrong. Then fix the mails in the ‘Needs your text’ tab: write your text in place of [OBSERVATION], or fix the listed reason (e.g. too few words) with Edit text. Once approved, mails go out by themselves.</>,
                 )}
               </DayRow>
               <DayRow n={3} head={M("/replies")}>
@@ -795,8 +896,8 @@ export default async function HelpPage() {
               <Part title={t("Do baar dabane wale buttons", "Buttons that ask twice")}
                 visual={<><B v="reject" icon="x">{t("Reject karo", "Reject")}</B><Icon name="arrow-right" size={12} className="text-slate-300" /><B v="armed" icon="alert">{t("Dobara dabao…", "Click again…")}</B></>}>
                 {t(
-                  "LIVE karo, Reject, campaign Start aur Sab approve karo jaise bade buttons pehli baar mein peele ho jaate hain. 5 second mein dobara dabao, tabhi kaam hota hai. Galti se dab gaya? Kuch mat karo, button apne aap normal ho jaata hai.",
-                  "Big buttons like Go LIVE, Reject, campaign Start and Approve all turn amber on the first press. The action only happens if you press again within 5 seconds. Pressed by mistake? Do nothing; the button goes back to normal by itself.",
+                  "LIVE karo, Reject, campaign Start, Selected approve karo aur Sab approve karo jaise bade buttons pehli baar mein peele ho jaate hain. 5 second mein dobara dabao, tabhi kaam hota hai. Galti se dab gaya? Kuch mat karo, button apne aap normal ho jaata hai.",
+                  "Big buttons like Go LIVE, Reject, campaign Start, Approve selected and Approve all turn amber on the first press. The action only happens if you press again within 5 seconds. Pressed by mistake? Do nothing; the button goes back to normal by itself.",
                 )}
               </Part>
               <Part title="Logout" visual={<span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500"><Icon name="logout" size={14} />Logout</span>}>
@@ -833,13 +934,13 @@ export default async function HelpPage() {
                     {
                       k: t("Aaj ka hisaab", "Today's numbers"),
                       d: t(
-                        <><b>Leads ko gayi</b> (aaj asli leads ko), <b>Approval baaki</b>, <b>Bheji / limit</b> (aaj kitni / aaj ki limit), <b>Agli mail kab</b>, <b>Queue</b> (chal rahe campaigns mein baaki leads) aur <b>Health</b> (hara / peela / laal). Tile pe click karke uska page kholo.</>,
-                        <><b>Sent to leads</b> (to real leads today), <b>To approve</b>, <b>Sent / limit</b> (today&apos;s count / today&apos;s limit), <b>Next mail</b>, <b>Queue</b> (leads left in running campaigns) and <b>Health</b> (green / yellow / red). Click a tile to open its page.</>,
+                        <><b>Leads ko gayi</b> (aaj asli leads ko), <b>Approval baaki</b> (aapke Approve ka wait; ‘Text chahiye’ wali bhi neeche likhi), <b>Bheji / limit</b> (aaj kitni / aaj ki limit), <b>Agli mail kab</b>, <b>Send queue</b> (approve ho chuki mails jo abhi jaani hain; neeche: kitne drafts abhi banne baaki) aur <b>Health</b> (hara / peela / laal). Tile pe click karke uska page kholo.</>,
+                        <><b>Sent to leads</b> (to real leads today), <b>Awaiting approval</b> (waiting for your Approve; those needing your text are noted below it), <b>Sent / limit</b> (today&apos;s count / today&apos;s limit), <b>Next mail</b>, <b>Send queue</b> (approved mails still to go out; below: how many drafts are still to be made) and <b>Health</b> (green / yellow / red). Click a tile to open its page.</>,
                       ),
                     },
-                    { k: t("Dhyan dene wali baatein", "Needs attention"), d: t("Problems ki list, sabse zaroori upar. Laal = zaroori, peela = dhyan do, neela = aapka kaam baaki. Line pe click = seedha wo page jahan ye theek hota hai.", "The list of problems, most urgent first. Red = urgent, yellow = needs attention, blue = a task waiting for you. Click a line to go straight to where it gets fixed.") },
+                    { k: t("Dhyan dene wali baatein", "Needs attention"), d: t("Problems ki list, sabse zaroori upar. Laal = zaroori, peela = dhyan do, neela = aapka kaam baaki (jaise review wale leads, ya ‘Text chahiye’ wali mails). Line pe click = seedha wo page jahan ye theek hota hai.", "The list of problems, most urgent first. Red = urgent, yellow = needs attention, blue = a task waiting for you (like leads to review, or mails that need your text). Click a line to go straight to where it gets fixed.") },
                     { k: t("Ab tak ka total", "All-time totals"), d: t("Shuru se ab tak: Total bheji, Reply aaye, Bounce, Opt-out aur Ledger.", "Since the start: Total sent, Replies, Bounced, Opted out and Ledger.") },
-                    { k: "Active campaigns", d: t("Chal rahe, ruke hue aur draft campaigns: progress, baaki leads aur andaza kab tak khatam.", "Running, paused and draft campaigns: progress, leads left and the estimated finish.") },
+                    { k: "Active campaigns", d: t("Chal rahe, ruke hue aur draft campaigns: progress, baaki leads, kitne drafts approval ke liye ruke hain, aur andaza kab tak khatam (agar aap approve karte raho).", "Running, paused and draft campaigns: progress, leads left, how many drafts await approval, and the estimated finish (if you keep approving).") },
                   ]} />
                 </div>
               </MenuRow>
@@ -875,8 +976,8 @@ export default async function HelpPage() {
                     {
                       k: t("Columns match karo", "Map columns"),
                       d: t(
-                        "Har field (Email *, Business ka naam, Contact ka naam, Website, Shehar, Desh, Business ka type, Business kya karta hai, Ek sach baat, Phone, Chain hai?) ke saamne apni file ka column chuno. App column ke naam dekh ke khud andaza lagata hai; galat ho to badlo. Sirf Email zaroori hai. Neeche pehli 5 rows ka preview dikhta hai.",
-                        "For each field (Email *, Business name, Contact name, Website, City, Country, Type of business, What they do, One true fact, Phone, Chain flag), choose the matching column of your file. The app guesses from the column names; change anything that is wrong. Only Email is required. The first 5 rows are previewed below.",
+                        "Har field (Email *, Business ka naam, Contact ka naam, Website, Shehar, Desh, Business ka type, Business kya karta hai, Ek sach baat, Google reviews, Rating, Observation, Apna subject, Apna mail text, Phone, Chain hai?) ke saamne apni file ka column chuno. App column ke naam dekh ke khud andaza lagata hai; galat ho to badlo. Sirf Email zaroori hai. Neeche pehli 5 rows ka preview dikhta hai.",
+                        "For each field (Email *, Business name, Contact name, Website, City, Country, Type of business, What they do, One true fact, Google reviews, Rating, Observation, Own subject, Own mail text, Phone, Chain flag), choose the matching column of your file. The app guesses from the column names; change anything that is wrong. Only Email is required. The first 5 rows are previewed below.",
                       ),
                     },
                     {
@@ -889,8 +990,8 @@ export default async function HelpPage() {
                     {
                       k: t("Ek lead add karo", "Add a single lead"),
                       d: t(
-                        <>Sirf ek address ho to ye form bharo: email (zaroori) aur jo pata ho (business, contact, website, shehar, desh, type, kya karte hain, sach baat), saath mein <b>Ye address kahan se mila? *</b>. Phir <B v="primary" icon="eye">Check karke preview dekho</B>: file jaise hi checks aur preview, phir confirm.</>,
-                        <>For just one address, fill in this form: the email (required) and whatever you know (business, contact, website, city, country, type, what they do, a true fact), plus <b>Where did you find this address? *</b>. Then <B v="primary" icon="eye">Check &amp; preview</B>: the same checks and preview as for a file, then confirm.</>,
+                        <>Sirf ek address ho to ye form bharo: email (zaroori) aur jo pata ho (business, contact, website, shehar, desh, type, kya karte hain, sach baat, reviews, rating, observation, ya is lead ke liye apna subject + text), saath mein <b>Ye address kahan se mila? *</b>. Phir <B v="primary" icon="eye">Check karke preview dekho</B>: file jaise hi checks aur preview, phir confirm.</>,
+                        <>For just one address, fill in this form: the email (required) and whatever you know (business, contact, website, city, country, type, what they do, a true fact, reviews, rating, observation, or your own subject + text for this lead), plus <b>Where did you find this address? *</b>. Then <B v="primary" icon="eye">Check &amp; preview</B>: the same checks and preview as for a file, then confirm.</>,
                       ),
                     },
                     { k: t("CSV mein kya do", "What to put in the CSV"), d: t("Har column ka matlab aur example, Import page pe hi (isi guide ke CSV wale hisse jaisa).", "What each column means, with an example, right on the Import page (like the CSV part of this guide).") },
@@ -910,7 +1011,7 @@ export default async function HelpPage() {
               </MenuRow>
 
               <MenuRow href="/campaigns" lang={lang} t={t}
-                line={t("List se campaign banao, 5 samples padho, start ya pause karo", "Create a campaign from a list, read 5 samples, start or pause it")}
+                line={t("List se campaign banao, start karo (kuch approve nahi hota), drafts ka haal dekho, pause karo", "Create a campaign from a list, start it (nothing gets approved), follow its drafts, pause it")}
                 when={t("Har nayi list ke liye ek campaign. Chalte campaign ka haal dekhne ke liye bhi.", "One campaign for each new list. Also to check how a running campaign is doing.")}>
                 <div>
                   <Sub icon="plus">{t("Naya campaign banao (form)", "Create a new campaign (form)")}</Sub>
@@ -922,15 +1023,15 @@ export default async function HelpPage() {
                     {
                       k: t("Mail kaise banegi", "How mails are written"),
                       d: t(
-                        <><b>AI har lead ke liye likhega</b> = har mail alag, CSV ki details se. <b>Template 1–6</b> (naam ke saath, jaise ‘Template 1: Website intro’) = sabko Settings ka ek hi fixed text, sirf naam, city jaisi cheezein bharti hain. <b>Website ke hisaab se 2 templates</b> = do fixed texts, app har lead ke liye sahi wala chunta hai. <a href="#ai-template" className="link">Kab kya chunein?</a></>,
-                        <><b>AI writes each mail</b> = a different mail for each lead, from its CSV details. <b>Template 1–6</b> (with its name, e.g. ‘Template 1: Website intro’) = one fixed text from Settings for everyone, with only things like name and city filled in. <b>Two templates, by website</b> = two fixed texts; the app picks the right one for every lead. <a href="#ai-template" className="link">Which to choose?</a></>,
+                        <><b>AI har lead ke liye likhega</b> = har mail alag, CSV ki details se. <b>Template 1–6</b> (naam ke saath, jaise ‘Template 1: Website intro’) = sabko Settings ka ek hi fixed text, sirf naam, city jaisi cheezein bharti hain. <b>Website ke hisaab se templates</b> = har group ke 1–3 fixed texts, baari baari. Jis lead ki CSV mein apna subject + body hai, use har tarike mein wahi text jaata hai. <a href="#ai-template" className="link">Kab kya chunein?</a></>,
+                        <><b>AI writes each mail</b> = a different mail for each lead, from its CSV details. <b>Template 1–6</b> (with its name, e.g. ‘Template 1: Website intro’) = one fixed text from Settings for everyone, with only things like name and city filled in. <b>Templates by website</b> = 1–3 fixed texts per group, used in turn. A lead with its own subject + body in the CSV gets that text whichever way you pick. <a href="#ai-template" className="link">Which to choose?</a></>,
                       ),
                     },
                     {
-                      k: <>{forText("nosite", t)} / {forText("site", t)}</>,
+                      k: <>{siteGroup(false, t)} / {siteGroup(true, t)}</>,
                       d: t(
-                        <>Sirf <b>Website ke hisaab se 2 templates</b> pe: har group ke liye ek template chuno. App templates ka <b>Kiske liye</b> tag aur campaign ki bhasha dekh ke sahi pair sujhata hai; chaho to badlo. Lead ki apni website hai ya nahi, ye sirf CSV ke website column se tay hota hai. <a href="#by-website" className="link">Kaise?</a></>,
-                        <>Only with <b>Two templates, by website</b>: choose a template for each group. The app suggests the right pair from the templates&apos; <b>Written for</b> tag and the campaign language; change it if you like. Whether a lead has its own website is decided only from the CSV&apos;s website column. <a href="#by-website" className="link">How?</a></>,
+                        <>Sirf <b>Website ke hisaab se templates</b> pe: har group ke liye 1–3 templates tick karo (checkbox). App pehle se sirf wahi templates tick karta hai jo campaign ki <b>Bhasha</b> mein likhe hain: us group ke apne, aur wo na hon to <b>Dono groups</b> wale. Us bhasha mein group ka koi template na ho to kuch tick nahi hota: aapko khud chunna hoga (ya Settings mein us bhasha ka template likho). Chaho to ticks badlo. Group ke leads ko ticked templates baari baari milte hain. Lead ki apni website hai ya nahi, ye sirf CSV ke website column se tay hota hai. <a href="#by-website" className="link">Kaise?</a></>,
+                        <>Only with <b>Templates by website</b>: tick 1–3 templates for each group (checkboxes). The app pre-ticks only templates written in the campaign&apos;s <b>Language</b>: the group&apos;s own, and if there are none, the <b>Both groups</b> ones. If the group has no template in that language, nothing is ticked: you must choose (or write a template in that language in Settings). You can change the ticks. The group&apos;s leads get the ticked templates in turn. Whether a lead has its own website is decided only from the CSV&apos;s website column. <a href="#by-website" className="link">How?</a></>,
                       ),
                     },
                     { k: <B v="primary" icon="plus">{t("Campaign banao", "Create campaign")}</B>, d: t("Campaign ban jaata hai aur list ke free leads jud jaate hain. Abhi koi mail nahi jaati.", "Creates the campaign and adds the list's free leads. No mail goes out yet.") },
@@ -940,8 +1041,8 @@ export default async function HelpPage() {
                   <Sub icon="megaphone">{t("Saare campaigns (table)", "All campaigns (table)")}</Sub>
                   <p className="text-sm leading-relaxed text-slate-600">
                     {t(
-                      "Har campaign ka status, list, bhasha / timezone, Bheji, Baaki aur Kab tak khatam; naam ke neeche AI, Template, ya website ke hisaab se dono templates. Naam pe click karke campaign ka page kholo. Status:",
-                      "Each campaign's status, list, language / timezone, Sent, Remaining and Est. finish; under the name, AI, the Template, or both templates for a by-website campaign. Click a name to open the campaign page. Status:",
+                      "Har campaign ka status, list, bhasha / timezone, Bheji, Baaki aur Kab tak khatam; naam ke neeche AI, Template, ya website ke hisaab se dono groups ke templates. Naam pe click karke campaign ka page kholo. Status:",
+                      "Each campaign's status, list, language / timezone, Sent, Remaining and Est. finish; under the name, AI, the Template, or the templates of both groups for a by-website campaign. Click a name to open the campaign page. Status:",
                     )}{" "}
                     <span className="inline-flex flex-wrap gap-1 align-middle"><Badge v="draft" /><Badge v="running" /><Badge v="paused" /><Badge v="done" /></span>
                   </p>
@@ -949,32 +1050,69 @@ export default async function HelpPage() {
                 <div>
                   <Sub icon="sliders">{t("Campaign ka page", "The campaign page")}</Sub>
                   <Defs items={[
-                    { k: t("Naam ke neeche", "Under the name"), d: t("Status, bhasha, list, aur mail kaise banti hai: AI, ‘Template 1: …’, ya website ke hisaab se dono templates.", "Status, language, list, and how mails are written: AI, ‘Template 1: …’, or both templates of a by-website campaign.") },
-                    { k: t("Upar ke steps", "Steps on top"), d: t("5 sample drafts banao → Padho aur start karo → Har mail approve karo → Bheji mails dekho. Neela step = aap abhi yahan ho.", "Make 5 sample drafts → Read and start → Approve every mail → See sent mails. The blue step = where you are now.") },
-                    { k: <B icon="bot">{t("5 sample drafts banao", "Make 5 sample drafts")}</B>, d: t("List ke pehle 5 leads ki mail banti hai (AI se, ya har lead ke sahi template se). Kuch na bane to dobara dabao: sirf bache hue bante hain.", "Mails are made for the first 5 leads of the list (by the AI, or from each lead's right template). If some fail, press it again: only the missing ones are made.") },
-                    { k: t("Har sample: left aur right", "Each sample: left and right"), d: t("Left mein mail jaisi lead ko jayegi, right mein uska English translation, bilkul Approve page jaisa. English mail pe right mein likha hota hai ki ye English mein hi hai.", "On the left the mail as the lead will get it, on the right its English translation, just like on the Approve page. For an English mail, the right side says it is already in English.") },
-                    { k: <B v="primary" icon="play">{t("Samples theek hain: approve karke start karo", "Samples look good: approve and start")}</B>, d: t("Do baar dabao. Paanchon samples approve ho jaate hain aur campaign chalu. SPF ya DKIM missing ho to start nahi hota.", "Press twice. The five samples are approved and the campaign starts. It does not start if SPF or DKIM is missing.") },
-                    { k: <><B icon="pause">{t("Pause karo", "Pause")}</B> <B v="primary" icon="play">{t("Resume karo", "Resume")}</B></>, d: t("Campaign rokna, aur baad mein wahin se aage chalana.", "Pause the campaign, and later carry on from where it stopped.") },
-                    { k: t("Chaar tiles", "Four tiles"), d: t("Baaki (Ready leads), Bheji gayi (reply, bounce, opt-out ke saath), Kab tak khatam (andaza) aur Bhasha / List (‘Kahan se mile’ ke saath).", "Remaining (Ready leads), Sent (with replies, bounces, opt-outs), Estimated finish and Language / List (with ‘Source’).") },
+                    { k: t("Naam ke neeche", "Under the name"), d: t("Status, bhasha, list, aur mail kaise banti hai: AI, ‘Template 1: …’, ya website ke hisaab se har group ke ticked templates.", "Status, language, list, and how mails are written: AI, ‘Template 1: …’, or the ticked templates of each group in a by-website campaign.") },
+                    {
+                      k: t("Upar ke 5 steps", "The 5 steps on top"),
+                      d: t(
+                        <>Samples (optional) → Start karo (koi mail approve nahi hoti) → Drafts ban rahe hain → Approve karo (aakhri step, sirf aapka) → Apne aap bheji jayengi. Drafts banna, approve karna aur bhejna saath saath chalte hain, isliye ek saath kai step ‘chal raha hai’ (neela) ho sakte hain. Phone pe ek step dikhta hai (aapka Approve, jab wo aapka wait kare) aur neeche saare steps ki chhoti bar.</>,
+                        <>Samples (optional) → Start (nothing gets approved) → Drafts being made → Approve (the last step, yours only) → Sent automatically. Drafting, approving and sending run side by side, so several steps can be in progress (blue) at once. On phones one step shows (your Approve, when it waits for you) with a small bar of all the steps below it.</>,
+                      ),
+                    },
+                    {
+                      k: t("Pipeline (mail ka safar)", "Pipeline (a mail's way)"),
+                      d: t(
+                        <>Is campaign ki ginti: Draft banne baaki → Text chahiye → Approval baaki → Send queue → Bheji gayi, saath mein Fail / manual check aur Skip. <a href="#pipeline" className="link">Har stage ka matlab</a></>,
+                        <>This campaign&apos;s counts: Drafts to make → Needs your text → Awaiting approval → Send queue → Sent, plus Failed / manual check and Skipped. <a href="#pipeline" className="link">What each stage means</a></>,
+                      ),
+                    },
+                    { k: <B icon="bot">{t("5 sample drafts banao", "Make 5 sample drafts")}</B>, d: t("Optional preview, Start se pehle: list ke pehle 5 leads ki mail banti hai (AI se, ya har lead ke sahi template se). Ye approve nahi hoti. Kuch na bane to dobara dabao: sirf bache hue bante hain.", "An optional preview before Start: mails are made for the first 5 leads of the list (by the AI, or from each lead's right template). They are not approved. If some fail, press it again: only the missing ones are made.") },
+                    { k: t("Har mail: left aur right", "Each mail: left and right"), d: t("Left mein mail jaisi lead ko jayegi, right mein uska English translation, bilkul Approve page jaisa. English mail pe right mein likha hota hai ki ye English mein hi hai.", "On the left the mail as the lead will get it, on the right its English translation, just like on the Approve page. For an English mail, the right side says it is already in English.") },
+                    { k: <B v="primary" icon="play">{t("Campaign start karo (koi mail approve nahi hogi)", "Start campaign (nothing gets approved)")}</B>, d: t("Do baar dabao. Campaign chalu hota hai aur worker har Ready lead ka draft banane lagta hai; koi mail approve nahi hoti, samples bhi nahi. Kam se kam ek Ready lead chahiye, aur SPF ya DKIM missing ho to start nahi hota.", "Press twice. The campaign starts and the worker begins making a draft for every Ready lead; no mail is approved, not even the samples. It needs at least one Ready lead, and it does not start if SPF or DKIM is missing.") },
+                    { k: <><B icon="pause">{t("Pause karo", "Pause")}</B> <B v="primary" icon="play">{t("Resume karo", "Resume")}</B></>, d: t("Campaign rokna, aur baad mein wahin se aage chalana. Ruke hue campaign ki approve ki hui mails bhi nahi jaati; Resume se kuch approve nahi hota.", "Pause the campaign, and later carry on from where it stopped. A paused campaign's approved mails do not go out either; Resume approves nothing.") },
+                    {
+                      k: "Tiles",
+                      d: t(
+                        <>Baaki (Ready leads), Bheji gayi (reply, bounce, opt-out ke saath), <b>Approved queue kab tak</b> aur Bhasha / List (‘Kahan se mile’ ke saath). ‘Approved queue kab tak’ andaza hai ki aapki approve ki hui mails kab tak chali jayengi: sirf approved mails gini jaati hain, isliye har nayi approval date ko aage le jaati hai. DRY-RUN mein test address pe ja chuki mails isme nahi gini jaati.</>,
+                        <>Remaining (Ready leads), Sent (with replies, bounces, opt-outs), <b>Approved queue sent by</b> and Language / List (with ‘Source’). ‘Approved queue sent by’ estimates when the mails you approved will have gone out: it counts approved mails only, so each new approval moves it later. In DRY-RUN, mails already sent to the test address are not counted.</>,
+                      ),
+                    },
                     {
                       k: <><B icon="refresh">{t("Naya version likho", "Write a new version")}</B> <B icon="refresh">{t("Template se dobara banao", "Rebuild from template")}</B></>,
                       d: t(
-                        "Kisi draft pe. AI campaign: purani hata ke nayi mail likhwao. Template campaign: Settings mein template badalne ke baad mail ko naye text se dobara bharo (website ke hisaab se campaign mein us lead ke sahi template se). English translation bhi naye text se apne aap banta hai.",
-                        "On a draft. AI campaign: throw it away and get a new mail written. Template campaign: after you change the template in Settings, refill the mail with the new text (in a by-website campaign, from that lead's right template). The English translation is made again from the new text by itself.",
+                        "Kisi draft pe (Text chahiye wale pe bhi). AI campaign: purani hata ke nayi mail likhwao. Template campaign: Settings mein template badalne ke baad mail ko naye text se dobara bharo; draft wahi template rakhta hai jisse wo bana tha. Nayi mail bhi approve nahi hoti, aur English translation naye text se apne aap banta hai.",
+                        "On a draft (one that needs your text too). AI campaign: throw it away and get a new mail written. Template campaign: after you change the template in Settings, refill the mail with the new text; the draft keeps the template it was made from. The new mail is not approved either, and the English translation is made again from the new text by itself.",
                       ),
                     },
-                    { k: t("Peele aur laal box", "Amber and red boxes"), d: t("‘Kuch drafts retry ke liye ruke hain’ = kuch leads ki mail nahi ban payi; app thodi der mein khud dobara try karta hai. Laal ‘status pakka nahi’ box = Manual check, Contacts mein dekho.", "‘Some drafts are waiting for a retry’ = some mails could not be made; the app retries by itself shortly. A red ‘uncertain status’ box = Manual check; see Contacts.") },
+                    { k: t("Peele aur laal box", "Amber and red boxes"), d: t("‘Kuch drafts retry ke liye ruke hain’ = kuch leads ki mail abhi nahi ban payi; app thodi der mein khud dobara try karta hai. AI draft 5 baar fail ho to wo ‘Text chahiye’ mein aapka wait karta hai. Laal ‘status pakka nahi’ box = Manual check, Contacts mein dekho.", "‘Some drafts are waiting for a retry’ = some leads' mails could not be made yet; the app retries by itself shortly. An AI draft that fails 5 times waits for you under ‘Needs your text’. A red ‘uncertain status’ box = Manual check; see Contacts.") },
                   ]} />
                 </div>
               </MenuRow>
 
               <MenuRow href="/review" lang={lang} t={t}
-                line={t("Har mail jaane se pehle yahan padho aur approve karo", "Read and approve every mail here before it goes out")}
+                line={t("Aakhri step: har mail yahan padho aur approve karo, phir wo apne aap jaati hai", "The last step: read and approve every mail here, then it goes out by itself")}
                 when={t("Roz, aur jab bhi upar ‘N mails approve karni hain’ dikhe.", "Every day, and whenever ‘N mails to approve’ shows at the top.")}>
+                <div>
+                  <Sub icon="filter">{t("Upar: tabs, filter aur chunna", "At the top: tabs, filters and selecting")}</Sub>
+                  <Defs items={[
+                    { k: t("Upar ka box", "Box at the top"), d: t("DRY-RUN: approve ki hui mail sirf test address pe jayegi. LIVE: asli lead ko. Dono mein approve ki hui mail sending window, gap aur daily limit ke andar apne aap jaati hai.", "DRY-RUN: an approved mail goes only to the test address. LIVE: to the real lead. In both, an approved mail goes out by itself within the sending window, the gap and the daily limit.") },
+                    { k: t("Pipeline", "Pipeline"), d: t(<>Draft banne baaki, Text chahiye, Approval baaki, Send queue aur Bheji gayi ki ginti, taaki dikhe ki kaam kahan ruka hai. <a href="#pipeline" className="link">Har stage ka matlab</a></>, <>The counts of Drafts to make, Needs your text, Awaiting approval, Send queue and Sent, so you see where work is waiting. <a href="#pipeline" className="link">What each stage means</a></>) },
+                    {
+                      k: <><Badge v="tab" label={t("Approval baaki", "Awaiting approval")} tone="amber" dot={false} /> <Badge v="tab" label={t("Text chahiye", "Needs your text")} tone="amber" dot={false} /></>,
+                      d: t(
+                        "Do tabs. Approval baaki = taiyaar mails jo aapke Approve ka wait kar rahi hain. Text chahiye = mails jinme pehle aapka text chahiye: [OBSERVATION] ki jagah apni baat, template / lead ke apne text ka toota niyam (wajah card pe likhi hai), ya AI 5 baar mein nahi likh paya. Ye tab tak approve nahi hoti.",
+                        "Two tabs. Awaiting approval = finished mails waiting for your Approve. Needs your text = mails that first need your text: your own words in place of [OBSERVATION], a rule broken by the template or the lead's own text (the card lists the reasons), or the AI could not write it in 5 tries. They cannot be approved until then.",
+                      ),
+                    },
+                    { k: t("Campaign aur Template filter", "Campaign and Template filters"), d: t("Sirf ek campaign ki, ya sirf ek template se bani mails dikhao, jaise ek template ki saari mails padh ke ek saath approve karna ho.", "Show only one campaign's mails, or only the mails made from one template, e.g. to read all mails of one template and approve them together.") },
+                    {
+                      k: <><B icon="check-check">{t("Sab chuno", "Select all")}</B> <B icon="x">{t("Koi nahi", "None")}</B></>,
+                      d: t("Har card pe checkbox hai. Sab chuno = dikh rahi saari mails tick, Koi nahi = saare tick hatao.", "Every card has a checkbox. Select all = tick every mail shown, None = clear all ticks."),
+                    },
+                  ]} />
+                </div>
                 <div>
                   <Sub icon="mail">{t("Har card mein", "In each card")}</Sub>
                   <Defs items={[
-                    { k: t("Upar ka box", "Box at the top"), d: t("DRY-RUN: approve ki hui mail sirf test address pe jayegi. LIVE: asli lead ko. Auto-approve on ho to peeli warning dikhti hai.", "DRY-RUN: an approved mail goes only to the test address. LIVE: to the real lead. With auto-approve on, an amber warning shows.") },
                     {
                       k: t("Lead ki line", "Lead line"),
                       d: t(
@@ -992,8 +1130,8 @@ export default async function HelpPage() {
                     {
                       k: t("‘Template se bani: …’", "‘Written from template: …’"),
                       d: t(
-                        <>Template wali mail pe ‘AI ko ye pata tha’ ki jagah: kaunsa template laga aur kyun, jaise <i>{siteText(siteStatus("facebook.com/trattoriaroma"), t)}</i>. Template kisi aur group ke liye likha ho (jaise ‘Jinki website HAI’ wala template us lead ko jiski website nahi), to peeli ‘Dhyan do’ line aati hai: text dhyan se padho.</>,
-                        <>On a template mail, instead of ‘What the AI knew’: which template was used and why, e.g. <i>{siteText(siteStatus("facebook.com/trattoriaroma"), t)}</i>. If the template is written for the other group (e.g. a ‘Leads with a website’ template for a lead without one), an amber ‘Note’ line appears: read the text carefully.</>,
+                        <>Template wali mail pe ‘AI ko ye pata tha’ ki jagah: kis template se bani (jaise ‘Template 3: …’) aur kyun, jaise <i>{siteText(siteStatus("facebook.com/trattoriaroma"), t)}</i>. Template kisi aur group ke liye likha ho (jaise ‘Website hai’ wala template us lead ko jiski website nahi), to peeli ‘Dhyan do’ line aati hai: text dhyan se padho. Lead ki CSV mein apna subject + body ho to likha hota hai ki mail lead ke apne text se bani.</>,
+                        <>On a template mail, instead of ‘What the AI knew’: which template it was made from (e.g. ‘Template 3: …’) and why, e.g. <i>{siteText(siteStatus("facebook.com/trattoriaroma"), t)}</i>. If the template is written for the other group (e.g. a ‘Has a website’ template for a lead without one), an amber ‘Note’ line appears: read the text carefully. If the lead had its own subject + body in the CSV, the card says the mail was made from the lead&apos;s own text.</>,
                       ),
                     },
                     { k: t("Left: Mail (jaisi jayegi)", "Left: Mail (as it will be sent)"), d: t("Bilkul wahi mail jo lead ko jayegi, uski bhasha mein: subject, text, signature aur footer.", "Exactly the mail the lead will get, in its language: subject, text, signature and footer.") },
@@ -1009,14 +1147,15 @@ export default async function HelpPage() {
                 <div>
                   <Sub icon="zap">Buttons</Sub>
                   <Defs items={[
-                    { k: <B v="success" icon="check">{t("Approve karo", "Approve")}</B>, d: t("Mail sending window mein jayegi (jab uska campaign chal raha ho).", "The mail goes out in the sending window (while its campaign is running).") },
-                    { k: <B icon="pencil">{t("Text edit karo", "Edit text")}</B>, d: t("Subject aur text khud badlo. Niyam: 60–110 words, aakhir mein ek sawaal (?), koi link nahi, ALL CAPS nahi, ‘!!’ nahi, bhasha wahi. Save karte hi right side ka English translation naye text se dobara banta hai: use padh ke phir approve karo.", "Change the subject and text yourself. Rules: 60–110 words, end with a question (?), no links, no ALL CAPS, no ‘!!’, same language. As soon as you save, the English translation on the right is made again from the new text: read it, then approve again.") },
-                    { k: <B icon="refresh">{t("Naya version likho", "Write a new version")}</B>, d: t("AI ye mail dobara likhta hai. Template wali mail us lead ke sahi template se dobara banti hai.", "The AI writes this mail again. A template mail is made again from that lead's right template.") },
+                    { k: <B v="success" icon="check">{t("Approve karo", "Approve")}</B>, d: t("Aakhri step. Mail send queue mein chali jaati hai aur worker use sending window, gap aur daily limit ke andar apne aap bhejta hai (jab uska campaign chal raha ho). Sirf wahi text approve hota hai jo card pe dikha: mail beech mein badli ho (naya version, doosre tab mein edit) to approve nahi hoti, page refresh karke dobara padho. ‘Text chahiye’ wali mail approve nahi hoti.", "The last step. The mail joins the send queue and the worker sends it by itself within the sending window, the gap and the daily limit (while its campaign is running). Only the exact text the card showed is approved: a mail that changed since (a new version, an edit in another tab) is refused; refresh the page and read it again. A mail that needs your text cannot be approved.") },
+                    { k: <B v="success" icon="check-check">{t("Selected approve karo", "Approve selected")}</B>, d: t("Checkbox wali saari mails ek saath approve (do baar dabao). Har mail alag se check hoti hai: ‘Text chahiye’ wali, ya aapke padhne ke baad badli hui, chhoot jaati hai, toast mein likha aata hai.", "Approves every ticked mail at once (press twice). Each mail is checked on its own: one that needs your text, or that changed after you read it, is skipped, and the toast says so.") },
+                    { k: <B icon="check-check">{t("Sab approve karo", "Approve all")}</B>, d: t("Dikh rahi saari mails ek saath approve (do baar dabao). Sirf tab jab sab padh li hon.", "Approves every mail shown at once (press twice). Only when you have read them all.") },
+                    { k: <B icon="pencil">{t("Text edit karo", "Edit text")}</B>, d: t("Subject aur text khud badlo; ‘Text chahiye’ wali mail mein [OBSERVATION] ki jagah apni baat likho, ya card pe likhi wajah theek karo. Niyam: 60–110 words, aakhir mein ek sawaal (?), koi link nahi, apne text mein ALL CAPS nahi, ‘!!’ nahi, bhasha wahi, koi [ ] ya {{ }} nahi bacha. Save ke baad mail ‘Approval baaki’ mein aati hai (approve nahi hoti) aur right ka English translation naye text se dobara banta hai: padh ke phir approve karo.", "Change the subject and text yourself; in a mail that needs your text, write your own words in place of [OBSERVATION], or fix the reason the card lists. Rules: 60–110 words, end with a question (?), no links, no ALL CAPS in your own text, no ‘!!’, same language, no [ ] or {{ }} left. After saving, the mail is under ‘Awaiting approval’ (not approved) and the English translation on the right is made again from the new text: read it, then approve.") },
+                    { k: <B icon="refresh">{t("Naya version likho", "Write a new version")}</B>, d: t("AI ye mail dobara likhta hai. Template wali mail usi template se dobara banti hai. Nayi mail bhi approve nahi hoti.", "The AI writes this mail again. A template mail is made again from the same template. The new mail is not approved either.") },
                     { k: <B icon="globe">{t("Abhi translation banao", "Make translation now")}</B>, d: t("Jab right mein ‘English translation ban raha hai’ dikhe. Na dabao to bhi worker 1-2 minute mein apne aap bana deta hai.", "When the right side says ‘The English translation is being made’. Even if you don't press it, the worker makes it within a minute or two.") },
                     { k: <B icon="globe">{t("Dobara translate karo", "Translate again")}</B>, d: t("English translation ke neeche. Translation ajeeb lage to naya banwao. Mail ka text isse nahi badalta.", "Under the English translation. If the translation reads oddly, get a new one. The mail text itself does not change.") },
-                    { k: <B v="reject" icon="x">{t("Reject karo", "Reject")}</B>, d: t("Do baar dabao. Is lead ko kabhi mail nahi jayegi.", "Press twice. This lead will never be emailed.") },
-                    { k: <B icon="check-check">{t("Sab N approve karo", "Approve all N")}</B>, d: t("Page ki saari mails ek saath approve (do baar dabao). Sirf tab jab sab padh li hon.", "Approves every mail on the page at once (press twice). Only when you have read them all.") },
-                    { k: t("Peela box: ‘Campaign abhi start nahi hua’", "Amber box: ‘The campaign has not started yet’"), d: t("Approve karne ke baad bhi mail tabhi jayegi jab campaign chalega. Campaign page pe start ya Resume karo.", "Even after approval, the mail goes out only once the campaign runs. Start or resume it on the campaign page.") },
+                    { k: <B v="reject" icon="x">{t("Reject karo", "Reject")}</B>, d: t("Do baar dabao. Is lead ko kabhi mail nahi jayegi. ‘Text chahiye’ wali mail pe bhi chalta hai.", "Press twice. This lead will never be emailed. Works on a mail that needs your text too.") },
+                    { k: t("Peela box: ‘Campaign abhi start nahi hua’", "Amber box: ‘The campaign has not started yet’"), d: t("Ye mail ek sample hai: approve karne ke baad bhi tabhi jayegi jab campaign chalega. Campaign page pe start ya Resume karo.", "This mail is a sample: even after approval it goes out only once the campaign runs. Start or resume it on the campaign page.") },
                   ]} />
                 </div>
               </MenuRow>
@@ -1068,7 +1207,7 @@ export default async function HelpPage() {
                   <Defs items={[
                     { k: t("Jaankari", "Details"), d: t("Business, email, website, phone, desh, list (‘Kahan se mile’ ke saath), campaign, aur Ledger mein hai ya nahi.", "Business, email, website, phone, country, list (with ‘Source’), campaign, and whether it is in the Ledger.") },
                     { k: t("AI ko kya pata hai", "What the AI knows"), d: t("Is lead ke baare mein AI ko bas yahi milta hai: contact, shehar, type, kya karte hain, sach baat aur website ka title / description. Kuch na ho to mail general rehti hai.", "All the AI gets about this lead: contact, city, type, what they do, a true fact and the website's title / description. If nothing is there, the mail stays general.") },
-                    { k: "Mail", d: t("Lead ke liye bani mail (AI se ya kis template se), approval ka status, aur Approve page jaisa: left mein mail jaisi jayegi, right mein uska English translation.", "The mail written for the lead (by the AI or from which template), the approval status, and just like on the Approve page: on the left the mail as it will be sent, on the right its English translation.") },
+                    { k: "Mail", d: t("Lead ke liye bani mail (AI se, kis template se, ya lead ke apne text se), approval ka status, aur Approve page jaisa: left mein mail jaisi jayegi, right mein uska English translation.", "The mail written for the lead (by the AI, from which template, or from the lead's own text), the approval status, and just like on the Approve page: on the left the mail as it will be sent, on the right its English translation.") },
                     { k: t("Aaye hue jawab", "Replies received"), d: t("Is lead se aaye reply, opt-out, bounce ya auto-reply.", "Replies, opt-outs, bounces or auto-replies from this lead.") },
                     { k: "History", d: t("Har step: draft bana, approve hua, server ka jawab, reply… Problem ki wajah yahin milti hai.", "Every step: draft created, approved, the server's reply, replies… The reason for a problem is found here.") },
                     { k: <><B icon="check">{t("Haan, mail gayi thi", "Yes, it was sent")}</B> <B icon="x">{t("Nahi gayi (band karo)", "No, not sent (close)")}</B></>, d: t("Sirf Manual check pe. Pehle Hostinger webmail ke Sent folder mein lead ka email dhoondo, phir sahi button do baar dabao. Mail apne aap kabhi dobara nahi jaati.", "Only for Manual check. First search for the lead's email in the Sent folder of Hostinger webmail, then press the right button twice. The mail is never resent automatically.") },
@@ -1128,7 +1267,7 @@ export default async function HelpPage() {
                     ),
                   },
                   { k: t("Wajah (optional)", "Reason (optional)"), d: t("Sirf aapki yaad ke liye. Khaali = ‘Khud daala’.", "Just a reminder for you. Empty = ‘Added manually’.") },
-                  { k: <B v="primary" icon="ban">{t("Block list mein daalo", "Add to block list")}</B>, d: t("Turant block. Jo leads Ready ya Review chahiye mein hain, wo ‘Block list’ status mein chale jaate hain. Approve ho chuki mail bhi nahi jaati.", "Blocks at once. Leads that are Ready or Needs review move to the ‘Blocked’ status. Even an already approved mail does not go out.") },
+                  { k: <B v="primary" icon="ban">{t("Block list mein daalo", "Add to block list")}</B>, d: t("Turant block. Jo leads Ready ya Review chahiye mein hain, wo ‘Block list’ status mein chale jaate hain. Approve ho chuki mail bhi nahi jaati: wo queue se hamesha ke liye nikal jaati hai, taaki baaki approved mails na ruke.", "Blocks at once. Leads that are Ready or Needs review move to the ‘Blocked’ status. Even an already approved mail does not go out: it leaves the queue for good, so it never holds up the other approved mails.") },
                   { k: t("Apne aap", "Automatically"), d: t("Opt-out reply aur hard bounce wale address khud yahan aa jaate hain.", "Addresses that send an opt-out reply or hard bounce are added here by themselves.") },
                   { k: t("Neeche ki table", "The table below"), d: t("Email / domain, Type (Email ya Poora domain), Wajah, Kab add hua. Permanent: kuch delete nahi hota.", "Email / domain, Type (Email or Whole domain), Reason, Added. Permanent: nothing is deleted.") },
                 ]} />
@@ -1200,23 +1339,30 @@ export default async function HelpPage() {
                   <Sub icon="file">Email templates</Sub>
                   <p className="mb-2 text-sm leading-relaxed text-slate-600">
                     {t(
-                      <>6 fixed templates (Template 1–6). Har ek mein <b>Template ka naam</b>, <b>Kiske liye</b>, <b>Subject</b> aur <b>Mail ka text</b>. Saath mein ek <b>Example lead</b> ke saath preview aur <b>Rules check</b> dikhta hai. Campaign mein Template chuno to yahi text jaata hai. <Code>{"{{business}}"}</Code>, <Code>{"{{contact|there}}"}</Code> aur <Code>{"{{website}}"}</Code> jaise placeholders har lead ki details se bharte hain. <a href="#ai-template" className="link">Poori list aur example</a></>,
-                      <>6 fixed templates (Template 1–6). Each has a <b>Template name</b>, <b>Written for</b>, a <b>Subject</b> and the <b>Mail text</b>, with a preview for an <b>Example lead</b> and a <b>Rules check</b>. Choose a Template in a campaign and this text is used. Placeholders like <Code>{"{{business}}"}</Code>, <Code>{"{{contact|there}}"}</Code> and <Code>{"{{website}}"}</Code> are filled with each lead&apos;s details. <a href="#ai-template" className="link">Full list and example</a></>,
+                      <>6 fixed templates (Template 1–6). Har ek mein <b>Template ka naam</b>, <b>Group</b>, <b>Bhasha</b>, <b>Subject</b> aur <b>Mail ka text</b>. Saath mein ek <b>Example lead</b> ke saath preview aur <b>Rules check</b> dikhta hai, aur upar har group (aur bhasha) ke kitne templates hain. Campaign mein Template chuno to yahi text jaata hai. <Code>{"{{business}}"}</Code>, <Code>{"{{contact|there}}"}</Code>, <Code>{"{{website}}"}</Code> aur <Code>{"{{observation}}"}</Code> jaise placeholders har lead ki details se bharte hain. <a href="#ai-template" className="link">Poori list aur example</a></>,
+                      <>6 fixed templates (Template 1–6). Each has a <b>Template name</b>, a <b>Group</b>, a <b>Language</b>, a <b>Subject</b> and the <b>Mail text</b>, with a preview for an <b>Example lead</b> and a <b>Rules check</b>, and at the top how many templates each group (and language) has. Choose a Template in a campaign and this text is used. Placeholders like <Code>{"{{business}}"}</Code>, <Code>{"{{contact|there}}"}</Code>, <Code>{"{{website}}"}</Code> and <Code>{"{{observation}}"}</Code> are filled with each lead&apos;s details. <a href="#ai-template" className="link">Full list and example</a></>,
                     )}
                   </p>
                   <Defs items={[
                     {
-                      k: t("Kiske liye", "Written for"),
+                      k: "Group",
                       d: t(
-                        <><b>{forText("any", t)}</b>, <b>{forText("nosite", t)}</b> ya <b>{forText("site", t)}</b>. Isse campaign form ‘Website ke hisaab se 2 templates’ mein sahi pair sujhata hai. Ye sirf sujhaav hai: kaunsi lead ko kaunsa template jaayega, wo campaign mein tay hota hai.</>,
-                        <><b>{forText("any", t)}</b>, <b>{forText("nosite", t)}</b> or <b>{forText("site", t)}</b>. The campaign form uses it to suggest the right pair for ‘Two templates, by website’. It is only a suggestion: which lead gets which template is set in the campaign.</>,
+                        <><b>{forText("nosite", t)}</b>, <b>{forText("site", t)}</b> ya <b>{forText("any", t)}</b>. ‘Website ke hisaab se templates’ wala campaign form isi se har group ke templates pehle se tick karta hai, sirf campaign ki bhasha wale: group ke apne, warna <b>{forText("any", t)}</b> wale; us bhasha mein koi na ho to kuch tick nahi hota. Ye sirf sujhaav hai: kaunse templates lagenge, wo campaign mein tick hota hai.</>,
+                        <><b>{forText("nosite", t)}</b>, <b>{forText("site", t)}</b> or <b>{forText("any", t)}</b>. For ‘Templates by website’, the campaign form uses it to pre-tick each group&apos;s templates, only those in the campaign&apos;s language: the group&apos;s own, else the <b>{forText("any", t)}</b> ones; if none is in that language, nothing is ticked. It is only a suggestion: which templates are used is ticked in the campaign.</>,
+                      ),
+                    },
+                    {
+                      k: t("Bhasha", "Language"),
+                      d: t(
+                        "Template kis bhasha mein likha hai: ‘Text se apne aap’ (app text padh ke pehchanta hai) ya English, French, German, Spanish, Italian, Dutch, Portuguese. Campaign form campaign ki bhasha wale templates hi pehle se tick karta hai, kabhi doosri bhasha wale nahi. Mail campaign ki bhasha mein na ho to uska draft ‘Text chahiye’ mein rukta hai (wajah ke saath).",
+                        "The language the template is written in: ‘Auto from the text’ (the app reads the text) or English, French, German, Spanish, Italian, Dutch, Portuguese. The campaign form pre-ticks only templates in the campaign's language, never ones in another language. A mail not in the campaign's language waits as a ‘Needs your text’ draft (with the reason).",
                       ),
                     },
                     {
                       k: t("Pehle se bhare examples", "Examples filled in"),
                       d: t(
-                        "Har bhasha ke liye ek pair rakho: ek ‘Jinki website NAHI hai’ (nayi website ka offer), ek ‘Jinki website HAI’ (website naya karne ka offer). Kuch templates mein English aur French ke example texts pehle se bhare hain, dono groups ke liye; inhe apne offer ke hisaab se badlo aur save karo.",
-                        "Keep one pair per language: one for ‘Leads without a website’ (offer a new website), one for ‘Leads with a website’ (offer to refresh it). Some templates come with English and French example texts for both groups; adapt them to your offer and save.",
+                        "Har bhasha ke liye har group ke 1–3 templates rakho: ‘Bina website’ wale (nayi website ka offer) aur ‘Website hai’ wale (website naya karne ka offer). Kuch templates mein English aur French ke example texts pehle se bhare hain, dono groups ke liye; inhe apne offer ke hisaab se badlo aur save karo.",
+                        "For each language, keep 1–3 templates per group: ‘No website’ ones (offer a new website) and ‘Has a website’ ones (offer to refresh it). Some templates come with English and French example texts for both groups; adapt them to your offer and save.",
                       ),
                     },
                   ]} />
@@ -1230,8 +1376,11 @@ export default async function HelpPage() {
                     { k: "Warm-up", d: t("Pehla din, Har din +, Max / din: naya domain dheere-dheere badhta hai.", "Day one, + per day, Max / day: a new domain ramps up slowly.") },
                     { k: "Mailbox plan", d: t("Plan limit / din. App kabhi iska 40% se zyada nahi bhejta. 0 = sirf warm-up.", "Plan limit / day. The app never sends more than 40% of it. 0 = warm-up only.") },
                     { k: t("Roz kitni mails jaayengi", "Mails per day"), d: t("Upar ki settings se roz ki limit ka preview (save ke baad update hota hai).", "A preview of the daily limit from the settings above (updates after saving).") },
-                    { k: t("Har mail approve karke hi bhejo", "Approve every mail before sending"), d: t("On (recommended) = har mail Approve page pe rukti hai. Off = 5 samples ke baad drafts apne aap approve.", "On (recommended) = every mail waits on the Approve page. Off = after the 5 samples, drafts are approved automatically.") },
                   ]} />
+                  <p className="hint">{t(
+                    "Approve ka koi switch nahi hai: har mail hamesha aapke Approve ka wait karti hai, aur approve ki hui mail inhi rules ke andar apne aap jaati hai.",
+                    "There is no approval switch: every mail always waits for your Approve, and an approved mail goes out by itself within these rules.",
+                  )}</p>
                 </div>
                 <div>
                   <Sub icon="bot">{t("AI aur DNS", "AI and DNS")}</Sub>
@@ -1284,7 +1433,9 @@ export default async function HelpPage() {
                         </td>
                         <td data-label={t("Zaroori?", "Needed?")}><Badge v={r.need} label={need[r.need].label} tone={need[r.need].tone} dot={false} /></td>
                         <td className="min-w-[14rem] text-slate-600">{r.what}</td>
-                        <td data-label="Example" className="font-medium text-slate-800 [overflow-wrap:anywhere] md:min-w-[9rem]">{CSV_EXAMPLE[r.c]}</td>
+                        <td data-label="Example" className="font-medium text-slate-800 [overflow-wrap:anywhere] md:min-w-[9rem]">
+                          {CSV_EXAMPLE[r.c] || <span className="font-normal text-slate-400">{t("(khaali: template ya AI)", "(empty: template or AI)")}</span>}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1296,8 +1447,8 @@ export default async function HelpPage() {
             <pre className="overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] leading-relaxed text-slate-700">{CSV_TEXT}</pre>
             <p className="hint">
               {t(
-                <>Ye Import page ki sample CSV ki pehli row hai (<B icon="download">Sample CSV download karo</B>). <Code>.example</Code> wale address sirf example hain, unhe kabhi mail nahi jaati. Kisi value mein comma ho to use &quot;double quotes&quot; mein rakho (Excel ye khud karta hai).</>,
-                <>This is the first row of the sample CSV on the Import page (<B icon="download">Download sample CSV</B>). The <Code>.example</Code> addresses are only examples and can never be mailed. If a value contains a comma, put it in &quot;double quotes&quot; (Excel does this for you).</>,
+                <>Ye Import page ki sample CSV ki pehli row hai (<B icon="download">Sample CSV download karo</B>). <Code>.example</Code> wale address sirf example hain, unhe kabhi mail nahi jaati. Is row mein subject aur body khaali hain, isliye is lead ko template ya AI wali mail banegi; observation French mein hai kyunki lead French hai. Kisi value mein comma ho to use &quot;double quotes&quot; mein rakho (Excel ye khud karta hai).</>,
+                <>This is the first row of the sample CSV on the Import page (<B icon="download">Download sample CSV</B>). The <Code>.example</Code> addresses are only examples and can never be mailed. This row has no subject and body, so this lead gets a template or AI mail; the observation is in French because the lead is French. If a value contains a comma, put it in &quot;double quotes&quot; (Excel does this for you).</>,
               )}
             </p>
 
@@ -1308,8 +1459,10 @@ export default async function HelpPage() {
                   t("category + about + note jitna bharoge, mail utni specific hogi.", "The more you fill in category + about + note, the more specific the mail."),
                   t("contact_name mein sirf first name (Marco), taaki mail ‘Hello Marco,’ se shuru ho.", "Put only the first name in contact_name (Marco), so the mail starts with ‘Hello Marco,’."),
                   t("country zaroor do: isse bhasha aur timezone sahi set hote hain.", "Always give country: it sets the right language and timezone."),
-                  t("website mein lead ki apni website do (pata ho to): ‘Website ke hisaab se 2 templates’ wala campaign isi se tay karta hai ki lead ko kaunsa template jaaye.", "Put the lead's own website in website (if you know it): a ‘Two templates, by website’ campaign uses it to decide which template the lead gets."),
-                  t("note mein sirf wahi likho jo sach aur pakka ho (reviews, nayi branch, award).", "In note, write only what is true and certain (reviews, a new branch, an award)."),
+                  t("website mein lead ki apni website do (pata ho to): ‘Website ke hisaab se templates’ wala campaign isi se tay karta hai ki lead kis group mein hai.", "Put the lead's own website in website (if you know it): a ‘Templates by website’ campaign uses it to decide which group the lead is in."),
+                  t("note mein sirf wahi likho jo sach aur pakka ho (nayi branch, award, kab se chal raha hai).", "In note, write only what is true and certain (a new branch, an award, how long they have been open)."),
+                  t("Template mein {{reviews}}, {{rating}} ya {{observation}} hai to reviews, rating aur observation bharo. observation mail ki bhasha mein likho (French lead = French) aur aise ki template ke sentence mein fit ho.", "If a template uses {{reviews}}, {{rating}} or {{observation}}, fill in reviews, rating and observation. Write observation in the mail's language (French lead = French) and so that it fits the template's sentence."),
+                  t("Kisi lead ko bilkul apni likhi mail bhejni ho to subject aur body dono bharo: us lead ko template ya AI ki jagah wahi jaati hai (wahi rules, wahi approval).", "To send a lead a mail you wrote yourself, fill in both subject and body: that lead gets it instead of the template or the AI (same rules, same approval)."),
                   t("Har row ka naam, email aur details alag hote hain; har mail mein us lead ki apni details hi aati hain.", "Every row has its own name, email and details; each mail uses only that lead's own details."),
                 ]} />
               </div>
@@ -1317,7 +1470,8 @@ export default async function HelpPage() {
                 <Sub icon="alert" className="!text-amber-700">{t("Dhyan do", "Good to know")}</Sub>
                 <Dots mark="alert" items={[
                   t("AI sirf aapki di hui details aur business ki apni website ka title / description use karta hai. Jo nahi pata, wo nahi likhta.", "The AI uses only the details you give and the title / description of the business's own website. What it doesn't know, it doesn't write."),
-                  t("AI kabhi andaza nahi lagata ki business kya karta hai, aur kabhi unki website pe comment nahi karta: ‘maine aapka homepage dekha, design achha nahi’ jaisi line kabhi nahi aati.", "The AI never guesses what a business does and never comments on their website: a line like ‘I saw your homepage, the design isn't great’ never appears."),
+                  t("AI kabhi andaza nahi lagata ki business kya karta hai, aur kabhi unki website pe comment nahi karta: ‘maine aapka homepage dekha, design achha nahi’ jaisi line AI kabhi nahi likhta. Website ki problem sirf aapke observation column se aati hai, aur sirf template ke {{observation}} mein.", "The AI never guesses what a business does and never comments on their website: the AI never writes a line like ‘I saw your homepage, the design isn't great’. A website problem only comes from your observation column, and only into a template's {{observation}}."),
+                  t("observation khaali ho aur template ko chahiye, to app koi default nahi bharta: draft ‘Text chahiye’ mein rukta hai aur wo hissa aap likhte ho.", "If observation is empty and the template needs it, the app fills in no default: the draft waits as ‘Needs your text’ and you write that part."),
                   t("category / about na ho to mail general rehti hai. Aisi list ke liye Template achha hai.", "Without category / about, the mail stays general. For such a list, a Template works well."),
                   t("Column ke naam alag ho sakte hain (Business, Company, Ville, Prénom…): Import screen pe match kar lo. Excel (XLSX) bhi chalega, aur Import page pe sample CSV milti hai.", "Column names can differ (Business, Company, Ville, Prénom…): match them on the import screen. Excel (XLSX) works too, and the Import page has a sample CSV."),
                   t("marie.dupont@gmail.com jaise personal address ‘Review chahiye’ mein jaate hain; jobs@, privacy@ jaise role address skip hote hain. Ek business ke kai email hon to app ek hi rakhta hai.", "Personal-looking addresses like marie.dupont@gmail.com go to ‘Needs review’; role addresses like jobs@ or privacy@ are skipped. If a business has several emails, the app keeps only one."),
@@ -1328,7 +1482,7 @@ export default async function HelpPage() {
 
           {/* ---------------- 8. AI or template ---------------- */}
           <Section id="ai-template" icon="bot" title={t("AI ya Template: kab kya chunein", "AI or Template: which to choose")}
-            sub={t("Campaign banate waqt ‘Mail kaise banegi’ mein chuno: AI, ek Template, ya Website ke hisaab se 2 templates", "Choose under ‘How mails are written’ when you create a campaign: AI, one Template, or two templates by website")}>
+            sub={t("Campaign banate waqt ‘Mail kaise banegi’ mein chuno: AI, ek Template, ya Website ke hisaab se templates", "Choose under ‘How mails are written’ when you create a campaign: AI, one Template, or Templates by website")}>
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               <Option icon="bot" title={t("AI har lead ke liye likhega", "AI writes each mail")} tag={t("Har mail personal", "Every mail personal")}
                 points={[
@@ -1348,24 +1502,30 @@ export default async function HelpPage() {
                   t("Template badla? Pehle bani draft pe campaign page pe ‘Template se dobara banao’ dabao.", "Changed a template? On drafts made earlier, press ‘Rebuild from template’ on the campaign page."),
                 ]}
                 when={t("Kab: kam details wali list, ya jab ek hi tested text sabko bhejna ho.", "When: a list with few details, or when you want to send one tested text to everyone.")} />
-              <Option icon="globe" className="md:col-span-2 xl:col-span-1" title={t("Website ke hisaab se 2 templates", "Two templates, by website")} tag={t("Do fixed texts", "Two fixed texts")}
+              <Option icon="globe" className="md:col-span-2 xl:col-span-1" title={t("Website ke hisaab se templates", "Templates by website")} tag={t("Har group ke 1–3 fixed texts", "1–3 fixed texts per group")}
                 points={[
                   t(
-                    <><b>{forText("nosite", t)}</b> unhe ek template (jaise nayi website ka offer), <b>{forText("site", t)}</b> unhe doosra (jaise website naya karne ka offer).</>,
-                    <><b>{forText("nosite", t)}</b> get one template (e.g. an offer for a new website), <b>{forText("site", t)}</b> get the other (e.g. an offer to refresh it).</>,
+                    <><b>{forText("nosite", t)}</b> unke liye 1–3 templates (jaise nayi website ka offer), <b>{forText("site", t)}</b> unke liye 1–3 (jaise website naya karne ka offer).</>,
+                    <><b>{forText("nosite", t)}</b>: 1–3 templates (e.g. an offer for a new website); <b>{forText("site", t)}</b>: 1–3 (e.g. an offer to refresh it).</>,
                   ),
-                  t("App har lead ke liye CSV ke website column se khud sahi template chunta hai. Aapko kuch alag nahi karna.", "The app picks the right template for every lead from the CSV's website column. Nothing extra to do."),
-                  t(<>Website wale template mein <Code>{"{{website}}"}</Code> se lead ki website ka naam aa sakta hai.</>, <>In the with-website template, <Code>{"{{website}}"}</Code> puts in the lead&apos;s website name.</>),
-                  t("Dono templates campaign ki bhasha mein hon: French campaign = dono French.", "Both templates must be in the campaign's language: French campaign = both French."),
+                  t("App har lead ka group CSV ke website column se khud dekhta hai, aur group ke ticked templates baari baari (round-robin) lagata hai: barabar baante jaate hain. Har draft pe likha hota hai ki wo kis template se bana.", "The app finds each lead's group from the CSV's website column, and uses the group's ticked templates in turn (round-robin), so they are shared out evenly. Every draft shows which template it was made from."),
+                  t(<>Website hai wale template mein <Code>{"{{website}}"}</Code> se lead ki website ka naam, aur <Code>{"{{observation}}"}</Code> se aapki dekhi hui problem aa sakti hai.</>, <>In a has-a-website template, <Code>{"{{website}}"}</Code> puts in the lead&apos;s website name, and <Code>{"{{observation}}"}</Code> the problem you saw.</>),
+                  t("Saare ticked templates campaign ki bhasha mein hon: French campaign = sab French. Form sirf campaign ki bhasha wale pehle se tick karta hai: group ke apne, warna Dono groups wale. Group ka us bhasha mein koi template na ho to kuch tick nahi hota: aap khud chuno.", "All ticked templates must be in the campaign's language: French campaign = all French. The form pre-ticks only templates in the campaign's language: the group's own, else the Both groups ones. If the group has none in that language, nothing is ticked: you choose."),
                 ]}
-                when={t("Kab: aap websites banate ho aur list mein dono tarah ke business hain: bina website wale aur website wale.", "When: you build websites and the list has both kinds of business: some without a website, some with one.")} />
+                when={t("Kab: aap websites banate ho aur list mein dono tarah ke business hain: bina website wale aur website wale. Kai templates tick karke dekho kaunsa text sabse achha chalta hai.", "When: you build websites and the list has both kinds of business: some without a website, some with one. Tick several templates to see which text works best.")} />
             </div>
 
-            <div className="mt-4">
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
               <Callout tone="info" title={t("Teeno ke liye same niyam", "The same rules for all three")}>
                 {t(
-                  "Har mail wahi checks paas karti hai (60–110 words, aakhir mein sawaal, koi link nahi…) aur aapke approval ke bina nahi jaati. Template campaign ki bhasha mein likho: French campaign = French template. Mail kisi bhi bhasha mein ho, Approve page pe uske right mein uska English matlab dikhta hai.",
-                  "Every mail passes the same checks (60–110 words, ends with a question, no links…) and goes out only with your approval. Write the template in the campaign's language: French campaign = French template. Whatever the mail's language, the Approve page shows its English meaning on the right.",
+                  "Har mail wahi checks paas karti hai (60–110 words, aakhir mein sawaal, koi link nahi…) aur aapke Approve ke bina nahi jaati. Template ya lead ka apna text kisi lead ke liye niyam tode to wo baar baar try nahi hota: draft ‘Text chahiye’ mein wajah ke saath rukta hai aur aap Text edit se theek karte ho. Template campaign ki bhasha mein likho: French campaign = French template. Mail kisi bhi bhasha mein ho, Approve page pe uske right mein uska English matlab dikhta hai.",
+                  "Every mail passes the same checks (60–110 words, ends with a question, no links…) and goes out only after your Approve. If a template or the lead's own text breaks a rule for a lead, it is not retried over and over: the draft waits as ‘Needs your text’ with the reasons, and you fix it with Edit text. Write the template in the campaign's language: French campaign = French template. Whatever the mail's language, the Approve page shows its English meaning on the right.",
+                )}
+              </Callout>
+              <Callout tone="info" title={t("Lead ka apna text (CSV ka subject + body)", "The lead's own text (CSV subject + body)")}>
+                {t(
+                  "Jis lead ki CSV row mein subject aur body dono hain, use template ya AI ki jagah bilkul wahi text jaata hai, teeno tarikon mein. Wahi rules lagte hain, signature aur footer apne aap judte hain, aur approve phir bhi aap karte ho.",
+                  "A lead whose CSV row has both subject and body gets exactly that text instead of the template or the AI, whichever of the three you pick. The same rules apply, the signature and footer are added automatically, and you still approve it.",
                 )}
               </Callout>
             </div>
@@ -1382,6 +1542,10 @@ export default async function HelpPage() {
                 t("Directory aur review site: PagesJaunes, Yelp, TripAdvisor…", "Directory and review sites: PagesJaunes, Yelp, TripAdvisor…"),
                 t("Booking ya delivery platform: TheFork, Doctolib, Planity, Booksy, Fresha, Treatwell, Booking.com, Uber Eats, Deliveroo…", "Booking or delivery platforms: TheFork, Doctolib, Planity, Booksy, Fresha, Treatwell, Booking.com, Uber Eats, Deliveroo…"),
                 t("Link-in-bio aur chat link: Linktree, WhatsApp, Telegram…", "Link-in-bio and chat links: Linktree, WhatsApp, Telegram…"),
+                t(
+                  <>Free ya temporary builder page, jo unke apne domain pe nahi: {BUILDER_HOSTS.map((h, i) => <span key={h}>{i > 0 && ", "}<Code>{h}</Code></span>)}…</>,
+                  <>Free or temporary builder pages, not on a domain of their own: {BUILDER_HOSTS.map((h, i) => <span key={h}>{i > 0 && ", "}<Code>{h}</Code></span>)}…</>,
+                ),
               ]} />
             </div>
             <div className="card-flush mt-3 !shadow-none">
@@ -1404,8 +1568,8 @@ export default async function HelpPage() {
               </div>
             </div>
             <p className="hint">{t(
-              "Approve page pe har template wali mail ke saath yahi line dikhti hai: kaunsa template laga aur kyun. Ek hi template sabko chuna ho to har lead ko wahi jaata hai, website ho ya na ho.",
-              "On the Approve page every template mail shows this line: which template was used and why. With one template for all, every lead gets that one, website or not.",
+              "Approve page pe har template wali mail ke saath yahi line dikhti hai: kaunsa template laga aur kyun. Ek group mein kai templates tick hon to us group ke leads ko wo baari baari milte hain (pehli lead ko pehla, doosri ko doosra…). Ek hi template sabko chuna ho to har lead ko wahi jaata hai, website ho ya na ho.",
+              "On the Approve page every template mail shows this line: which template was used and why. With several templates ticked for a group, its leads get them in turn (the first lead the first, the second the second…). With one template for all, every lead gets that one, website or not.",
             )}</p>
 
             <Sub icon="pencil" className="mt-5">{t("Template ke placeholders", "Template placeholders")}</Sub>
@@ -1425,7 +1589,7 @@ export default async function HelpPage() {
                 </table>
               </div>
             </div>
-            <p className="hint">{t("| ke baad wala text tab aata hai jab CSV mein us lead ki value khaali ho.", "The text after | is used when that lead has no value in the CSV.")}</p>
+            <p className="hint">{t("| ke baad wala text tab aata hai jab CSV mein us lead ki value khaali ho ({{observation}} ko chhod ke: wahan kabhi nahi).", "The text after | is used when that lead has no value in the CSV (except for {{observation}}: never there).")}</p>
 
             <Sub icon="eye" className="mt-5">{t("Example: ek template, do leads", "Example: one template, two leads")}</Sub>
             <div className="grid gap-3 md:grid-cols-3">
@@ -1441,6 +1605,33 @@ export default async function HelpPage() {
               ))}
             </div>
             <p className="hint">{t("(Settings mein Business = Brighton Solution maan ke.)", "(Assuming Business = Brighton Solution in Settings.)")}</p>
+
+            <Sub icon="pencil" className="mt-5">{t(<>{"{{observation}}"} aur ‘Text chahiye’</>, <>{"{{observation}}"} and ‘Needs your text’</>)}</Sub>
+            <p className="text-sm leading-relaxed text-slate-600">{t(
+              "Observation wo problem hai jo aapne khud lead ki website pe dekhi, isliye app use kabhi andaze ya default text se nahi bharta, | ke baad kuch likha ho tab bhi nahi. Lead ki observation khaali ho to draft ‘Text chahiye’ mein rukta hai aur mail mein [OBSERVATION] likha aata hai. Approve page pe ‘Text edit karo’ se wo hissa likho aur save karo: tab mail ‘Approval baaki’ mein aati hai.",
+              "The observation is a problem you saw on the lead's website yourself, so the app never fills it with a guess or a default, not even with text after |. If the lead's observation is empty, the draft waits as ‘Needs your text’ and the mail shows [OBSERVATION]. Write that part with ‘Edit text’ on the Approve page and save: then the mail moves to ‘Awaiting approval’.",
+            )}</p>
+            <div className="mt-3 grid gap-3 md:grid-cols-3">
+              {[
+                { label: t("Template mein likha", "Written in the template"), text: OBS_TPL, tone: "border-slate-200 bg-slate-50" },
+                { label: t("Lead ki observation di hai", "The lead has an observation"), text: OBS_FULL, tone: "border-emerald-200 bg-emerald-50/40" },
+                { label: t("Observation khaali: Text chahiye", "No observation: needs your text"), text: OBS_EMPTY, tone: "border-amber-200 bg-amber-50/40" },
+              ].map((x) => (
+                <div key={x.label} className="min-w-0">
+                  <div className="mb-1.5 text-2xs font-bold uppercase tracking-wider text-slate-400">{x.label}</div>
+                  <pre className={`whitespace-pre-wrap rounded-lg border p-3 font-mono text-[11px] leading-relaxed text-slate-700 [overflow-wrap:anywhere] ${x.tone}`}>{x.text}</pre>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4">
+              <Callout tone="info" title={t("Capital letters ka niyam", "The capital letters rule")}>
+                {t(
+                  "ALL CAPS shabd mail mein mana hain, par sirf aapke apne text mein. Jo value placeholder se aati hai (jaise business ka naam ‘CAFÉ DE CHIRAZ’, ya city) wo jaisi CSV mein hai waisi chal jaati hai. Template ya edit mein aapka khud ka ‘FREE’ ya ‘SPECIAL’ phir bhi rokta hai.",
+                  "ALL CAPS words are not allowed in a mail, but only in your own text. A value that comes in through a placeholder (like the business name ‘CAFÉ DE CHIRAZ’, or the city) is fine as written in the CSV. Your own ‘FREE’ or ‘SPECIAL’ in a template or an edit is still refused.",
+                )}
+              </Callout>
+            </div>
           </Section>
 
           {/* ---------------- 9. the English check ---------------- */}
@@ -1500,7 +1691,7 @@ export default async function HelpPage() {
                 {t("Opt-out aur hard bounce apne aap block. Aap khud bhi email ya poora domain daal sakte ho.", "Opt-outs and hard bounces are blocked automatically. You can add emails or whole domains yourself too.")}
               </Feature>
               <Feature tone="emerald" icon="check-check" title={t("Har mail aapke approval se", "Every mail needs your approval")}>
-                {t("Settings mein ‘Har mail approve karke hi bhejo’ on rakho (recommended). Aapke approve kiye bina kuch nahi jaata.", "Keep ‘Approve every mail before sending’ on in Settings (recommended). Nothing goes out without your approval.")}
+                {t("Aapka Approve hamesha aakhri step hai, aur koi switch ise band nahi karta. Campaign Start, samples, Resume ya LIVE: inme se kuch bhi mail approve nahi karta. Approve sirf wahi text approve karta hai jo aapne dekha.", "Your Approve is always the last step, and no switch turns it off. Starting a campaign, the samples, Resume or LIVE: none of them approves a mail. Approve only approves exactly the text you saw.")}
               </Feature>
               <Feature tone="emerald" icon="clock" title={t("Sending window aur random gap", "Sending window and a random gap")}>
                 {t("Mails sirf lead ke office time mein, chune hue dino mein, aur har mail ke beech kuch minute ka random gap, bilkul insaan ki tarah.", "Mails go out only in the lead's office hours, on the chosen days, with a random gap of a few minutes between mails, just like a person.")}
@@ -1518,7 +1709,7 @@ export default async function HelpPage() {
                 {t("Mail ke text mein koi link nahi (sirf signature mein aapki website). Koi tracking pixel nahi; logo bhi mail ke andar hi hota hai.", "No links in the mail text (only your website in the signature). No tracking pixel; even the logo is inside the mail itself.")}
               </Feature>
               <Feature tone="emerald" icon="pencil" title={t("Har mail ke niyam", "Rules for every mail")}>
-                {t("60–110 words, aakhir mein ek sawaal, ALL CAPS nahi, ‘urgent’ ya ‘guarantee’ jaise shabd nahi, nakli ‘Re:’ subject nahi. AI ki mail, template aur aapka edit: sab pe same check.", "60–110 words, ends with a question, no ALL CAPS, no words like ‘urgent’ or ‘guarantee’, no fake ‘Re:’ subject. AI mails, templates and your edits all get the same check.")}
+                {t("60–110 words, aakhir mein ek sawaal, apne text mein ALL CAPS nahi (lead ke naam jaisi placeholder values chalti hain), ‘urgent’ ya ‘guarantee’ jaise shabd nahi, nakli ‘Re:’ subject nahi. AI ki mail, template, lead ka apna text aur aapka edit: sab pe same check. Jo mail check pe ruke, wo kabhi apne aap nahi jaati: ‘Text chahiye’ mein aapke edit ka wait karti hai.", "60–110 words, ends with a question, no ALL CAPS in your own text (placeholder values like the lead's name are fine), no words like ‘urgent’ or ‘guarantee’, no fake ‘Re:’ subject. AI mails, templates, the lead's own text and your edits all get the same check. A mail that fails the check never goes out by itself: it waits for your edit under ‘Needs your text’.")}
               </Feature>
               <Feature tone="emerald" icon="globe" title={t("SPF aur DKIM zaroori", "SPF and DKIM required")}>
                 {t("Inke bina campaign start hi nahi hota, taaki mails spam mein na jaayein.", "Without them a campaign does not even start, so mails don't land in spam.")}
@@ -1539,8 +1730,10 @@ export default async function HelpPage() {
                   t(<>DRY-RUN on hai? Tab mails sirf aapke Test address pe jaati hain ({M("/sent")} → Dry-run tab).</>, <>Is DRY-RUN on? Then mails only go to your Test address ({M("/sent")} → Dry-run tab).</>),
                   t("Sending window ke bahar ho, ya aaj sending din nahi? Dashboard ka ‘Agli mail kab’ dekho.", "Outside the sending window, or not a sending day? See ‘Next mail’ on the Dashboard."),
                   t("Aaj ki limit poori ho gayi? Dashboard ka ‘Bheji / limit’ dekho.", "Today's limit reached? See ‘Sent / limit’ on the Dashboard."),
-                  t(<>Koi mail approve nahi ki? {M("/review")} dekho.</>, <>Nothing approved yet? See {M("/review")}.</>),
-                  t("Campaign ruka hua hai ya start nahi hua? Campaign page pe ‘Resume karo’, ya samples approve karke start karo.", "Is the campaign paused or not started? Press ‘Resume’ on the campaign page, or approve the samples and start."),
+                  t(<>Koi mail approve nahi ki? Start ke baad bhi koi mail apne aap approve nahi hoti: {M("/review")} pe approve karo.</>, <>Nothing approved yet? Even after Start no mail is approved by itself: approve them on {M("/review")}.</>),
+                  t("Campaign ruka hua hai ya start nahi hua? Campaign page pe ‘Resume karo’, ya ‘Campaign start karo’ dabao.", "Is the campaign paused or not started? Press ‘Resume’ on the campaign page, or ‘Start campaign’."),
+                  t("Drafts abhi ban rahe hain? Worker har minute template se 50 tak aur AI se sirf 3 drafts banata hai; campaign ki pipeline mein ‘Draft banne baaki’ dekho.", "Are the drafts still being made? Every minute the worker makes up to 50 from a template but only 3 with the AI; see ‘Drafts to make’ in the campaign's pipeline."),
+                  t(<>Mails ‘Text chahiye’ mein ruki hain? {M("/review")} ke us tab mein unhe Text edit se theek karo, phir approve karo.</>, <>Are mails waiting under ‘Needs your text’? Fix them with Edit text in that tab of {M("/review")}, then approve them.</>),
                   t("STOP ya auto-pause on hai? Laal patti dikhegi; Dashboard pe wajah padho.", "Is STOP or auto-pause on? A red strip shows; read the reason on the Dashboard."),
                   t("Worker band hai? Agla sawaal dekho.", "Is the worker down? See the next question."),
                 ]} />
@@ -1605,16 +1798,46 @@ export default async function HelpPage() {
                   <>If it says ‘The English translation is being made’, wait a minute or two (the worker must be running) and refresh the page, or press <B icon="globe">Make translation now</B>. If a reason shows, run ‘AI test’ in Settings: the AI key or model may be the problem. If the AI&apos;s rate limit was hit, the worker waits a while and tries again by itself. A mail in English gets no translation: the right side says it is already in English.</>,
                 )}</p>
               </Faq>
-              <Faq q={t("Lead ka Facebook / Google Maps page hai, phir bhi ‘Bina website’ wala template kyun gaya?", "The lead has a Facebook / Google Maps page: why did it get the no-website template?")}>
+              <Faq q={t("Campaign start kiya, par Approve page pe sab ‘Approval baaki’ mein hain", "I started the campaign, but everything is ‘Awaiting approval’")}>
                 <p>{t(
-                  "Kyunki wo unki apni website nahi hai. Social profile, Google Maps, directory, booking ya delivery site ka link ‘Bina website’ hi maana jaata hai. Sirf CSV ka website column dekha jaata hai, isliye list banate waqt lead ki apni website pata ho to wahi daalo. Is mail ka text lead pe theek na baithe to ‘Text edit karo’ se badlo, ya Reject karo.",
-                  "Because that is not a website of their own. A social profile, Google Maps, directory, booking or delivery link counts as ‘No website’. Only the CSV's website column is used, so when you build a list, put the lead's own website there if you know it. If this mail's text does not fit the lead, change it with ‘Edit text’, or Reject it.",
+                  "Ye bilkul sahi hai. Start sirf campaign chalu karta hai aur worker ko har Ready lead ka draft banane deta hai; koi mail approve nahi karta, samples bhi nahi. Mails padho aur khud approve karo (ek, chuni hui, ya Sab approve karo). Approve hote hi wo send queue mein aati hain aur apne aap jaati hain.",
+                  "That is exactly right. Start only runs the campaign and lets the worker make a draft for every Ready lead; it approves no mail, not even the samples. Read the mails and approve them yourself (one, the selected ones, or Approve all). Once approved, they join the send queue and go out by themselves.",
+                )}</p>
+              </Faq>
+              <Faq q={t("Mail mein [OBSERVATION] likha hai aur Approve nahi ho rahi", "A mail shows [OBSERVATION] and cannot be approved")}>
+                <p>{t(
+                  <>Template mein <Code>{"{{observation}}"}</Code> hai par is lead ki observation CSV mein nahi thi. App wahan apne aap kuch nahi likhta, isliye mail ‘Text chahiye’ tab mein hai. <B icon="pencil">Text edit karo</B> dabao, [OBSERVATION] ki jagah lead ki website ki asli problem likho (mail ki bhasha mein) aur save karo. Phir mail ‘Approval baaki’ mein aati hai: padh ke approve karo. Problem nahi pata? <B v="reject" icon="x">Reject karo</B>, ya agli list mein observation column bharo.</>,
+                  <>The template uses <Code>{"{{observation}}"}</Code> but this lead had no observation in the CSV. The app writes nothing there by itself, so the mail is in the ‘Needs your text’ tab. Press <B icon="pencil">Edit text</B>, replace [OBSERVATION] with a real problem on the lead&apos;s website (in the mail&apos;s language) and save. The mail then moves to ‘Awaiting approval’: read it and approve. Don&apos;t know a problem? <B v="reject" icon="x">Reject</B> it, or fill the observation column in your next list.</>,
+                )}</p>
+              </Faq>
+              <Faq q={t("Mail ‘Text chahiye’ mein hai, par usme [OBSERVATION] nahi hai", "A mail is under ‘Needs your text’ but has no [OBSERVATION]")}>
+                <p>{t(
+                  <>Card pe wajah likhi hai. Template ya lead ka apna CSV text is lead ke liye koi niyam todta hai (jaise ‘body has 48 words (needs 60-110)’, aakhir mein sawaal nahi, body mein link, ALL CAPS shabd, ya galat bhasha): app aisi draft baar baar nahi banata, ek baar rok ke aapko dikhata hai. Ya AI 5 baar mein mail nahi likh paya, tab text khaali bhi ho sakta hai. <B icon="pencil">Text edit karo</B> se wajah theek karo (ya poori mail likho) aur save karo: mail ‘Approval baaki’ mein aati hai aur English translation tab banta hai. Bahut leads pe same wajah ho to Settings mein template theek karo, phir un drafts pe <B icon="refresh">Template se dobara banao</B> dabao.</>,
+                  <>The card lists the reasons. The template or the lead&apos;s own CSV text breaks a rule for this lead (e.g. ‘body has 48 words (needs 60-110)’, no question at the end, a link in the body, ALL CAPS words, or the wrong language): the app does not keep remaking such a draft, it stops once and shows it to you. Or the AI could not write the mail in 5 tries, in which case the text may be empty. Fix the reason (or write the whole mail) with <B icon="pencil">Edit text</B> and save: the mail moves to ‘Awaiting approval’ and its English translation is made then. If many leads show the same reason, fix the template in Settings, then press <B icon="refresh">Rebuild from template</B> on those drafts.</>,
+                )}</p>
+              </Faq>
+              <Faq q={t("Approve dabaya, par ‘mail aapke padhne ke baad badal gayi’ aaya", "I pressed Approve, but it says the mail changed after I read it")}>
+                <p>{t(
+                  "Approve sirf wahi text approve karta hai jo aapke card pe dikha tha. Aapke padhne ke baad mail badli (naya version, ya doosre tab / phone pe edit), isliye app ne bina padhe approve nahi kiya. Page refresh karo, naya text (aur uska English) padho, phir approve karo.",
+                  "Approve only approves the exact text your card showed. The mail changed after you read it (a new version, or an edit in another tab or on your phone), so the app did not approve it unread. Refresh the page, read the new text (and its English), then approve.",
+                )}</p>
+              </Faq>
+              <Faq q={t("Business ka naam capitals mein hai (CAFÉ DE CHIRAZ): mail fail hogi?", "The business name is in capitals (CAFÉ DE CHIRAZ): will the mail fail?")}>
+                <p>{t(
+                  "Nahi. Placeholder se aayi values (business ka naam, contact, city…) ALL CAPS check mein nahi gini jaati. Sirf aapke apne template ya edit ke capital shabd rokte hain.",
+                  "No. Values that come in through placeholders (business name, contact, city…) do not count for the ALL CAPS check. Only capital words in your own template or edit are refused.",
+                )}</p>
+              </Faq>
+              <Faq q={t("Lead ka Facebook / Google Maps / wixsite page hai, phir bhi ‘Bina website’ wala template kyun gaya?", "The lead has a Facebook / Google Maps / wixsite page: why did it get a no-website template?")}>
+                <p>{t(
+                  "Kyunki wo unki apni website nahi hai. Social profile, Google Maps, directory, booking ya delivery site ka link, aur wixsite.com, eatbu.com, metro.rest, framer.website, myshopify.com, mailchimpsites.com, ody.app, webflow.io jaise free / temporary builder page ‘Bina website’ hi maane jaate hain. Sirf CSV ka website column dekha jaata hai, isliye list banate waqt lead ki apni website pata ho to wahi daalo. Is mail ka text lead pe theek na baithe to ‘Text edit karo’ se badlo, ya Reject karo.",
+                  "Because that is not a website of their own. A social profile, Google Maps, directory, booking or delivery link, and free / temporary builder pages like wixsite.com, eatbu.com, metro.rest, framer.website, myshopify.com, mailchimpsites.com, ody.app or webflow.io count as ‘No website’. Only the CSV's website column is used, so when you build a list, put the lead's own website there if you know it. If this mail's text does not fit the lead, change it with ‘Edit text’, or Reject it.",
                 )}</p>
               </Faq>
               <Faq q={t("Approve ki hui mail ab nahi bhejni", "I approved a mail but no longer want it sent")}>
                 <p>{t(
-                  "Us lead ka email Block List mein daal do: wo mail nahi jayegi. Isliye LIVE karne se pehle DRY-RUN ki approvals dhyan se dekh lo.",
-                  "Add that lead's email to the Block list: the mail will not go out. That is why you should check your DRY-RUN approvals carefully before going LIVE.",
+                  "Us lead ka email Block List mein daal do: wo mail queue se hamesha ke liye nikal jaati hai aur baaki approved mails ko nahi rokti. Lead opt-out ya reply kare to bhi yahi hota hai. Isliye LIVE karne se pehle DRY-RUN ki approvals dhyan se dekh lo.",
+                  "Add that lead's email to the Block list: the mail leaves the queue for good and does not hold up the other approved mails. The same happens when the lead opts out or replies. That is why you should check your DRY-RUN approvals carefully before going LIVE.",
                 )}</p>
               </Faq>
               <Faq q={t("Leads ko mail kis naam se dikhti hai?", "Which name do leads see?")}>
